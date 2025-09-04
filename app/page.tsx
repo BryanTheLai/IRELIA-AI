@@ -18,7 +18,7 @@ type Accepted = {
 } | null;
 
 export default function Page(): JSX.Element {
-  const [productName, setProductName] = useState<string>('Apple Share');
+  const [productName, setProductName] = useState<string>('Airpods 2000');
   const [basePrice, setBasePrice] = useState<number>(150);
   const [stickerPrice, setStickerPrice] = useState<number>(220);
   const [buyers, setBuyers] = useState<Buyer[]>([
