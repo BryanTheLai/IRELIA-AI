@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConversation } from '@elevenlabs/react';
 
 type Buyer = {
@@ -20,6 +20,7 @@ type Accepted = {
 export default function Page(): JSX.Element {
   const [productName, setProductName] = useState<string>('Apple Share');
   const [basePrice, setBasePrice] = useState<number>(150);
+  const [stickerPrice, setStickerPrice] = useState<number>(220);
   const [buyers, setBuyers] = useState<Buyer[]>([
     { id: 1, name: 'Buyer A', price: 140, min: 1, max: 1000 },
     { id: 2, name: 'Buyer B', price: 150, min: 1, max: 1000 },
@@ -31,8 +32,16 @@ export default function Page(): JSX.Element {
   const [now, setNow] = useState<number>(Date.now());
   const [endingSoon, setEndingSoon] = useState<boolean>(false);
 
-  const freezeAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 120_000 : null), [connectedAt]);
-  const endAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 180_000 : null), [connectedAt]);
+  const stateRef = useRef({
+    productName,
+    basePrice,
+    stickerPrice,
+    buyers,
+    accepted,
+  });
+
+  const freezeAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 90_000 : null), [connectedAt]);
+  const endAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 120_000 : null), [connectedAt]);
 
   const bestBid = useMemo(() => {
     const sorted = [...buyers].sort((a, b) => b.price - a.price);
@@ -40,17 +49,6 @@ export default function Page(): JSX.Element {
   }, [buyers]);
 
   const conversation = useConversation({
-    clientTools: {
-      get_current_bids: (): string => {
-        const list = buyers.map((b) => `${b.name}:${b.price}`).join(', ');
-        const best = bestBid ? `${bestBid.name}:${bestBid.price}` : 'N/A';
-        const acc = accepted ? `${accepted.buyerName}:${accepted.price}` : 'none';
-        return `Product ${productName} base ${basePrice}. Bids: ${list}. Best: ${best}. Accepted: ${acc}.`;
-      },
-      set_phase: ({ phase }: { phase: string }): string => {
-        return `Phase set to ${phase}`;
-      },
-    },
     onConnect: () => {
       setConnectedAt(Date.now());
       setSlidersFrozen(false);
@@ -73,6 +71,22 @@ export default function Page(): JSX.Element {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    stateRef.current.productName = productName;
+  }, [productName]);
+  useEffect(() => {
+    stateRef.current.basePrice = basePrice;
+  }, [basePrice]);
+  useEffect(() => {
+    stateRef.current.stickerPrice = stickerPrice;
+  }, [stickerPrice]);
+  useEffect(() => {
+    stateRef.current.buyers = buyers;
+  }, [buyers]);
+  useEffect(() => {
+    stateRef.current.accepted = accepted;
+  }, [accepted]);
 
   useEffect(() => {
     const newMin = Math.max(1, Math.floor(basePrice * 0.5));
@@ -107,21 +121,46 @@ export default function Page(): JSX.Element {
   useEffect(() => {
     if (!endAtMs) return;
     const remaining = endAtMs - Date.now();
+    const acceptAndEnd = async (): Promise<void> => {
+      if (bestBid && bestBid.price >= basePrice) {
+        const next: Accepted = { buyerId: bestBid.id, buyerName: bestBid.name, price: bestBid.price };
+        setAccepted(next);
+        setSlidersFrozen(true);
+        setEndingSoon(true);
+        await conversation.sendUserMessage(
+          `Ending call and accepting the best current offer: ${bestBid.name} at ${bestBid.price} for ${productName}.`
+        );
+        setTimeout(() => {
+          void conversation.endSession();
+        }, 5000);
+      } else {
+        await conversation.sendUserMessage('Ending call. No acceptable offer.');
+        await conversation.endSession();
+      }
+    };
     if (remaining <= 0) {
-      void conversation.endSession();
+      void acceptAndEnd();
     } else {
-      const to = setTimeout(() => void conversation.endSession(), remaining);
+      const to = setTimeout(() => {
+        void acceptAndEnd();
+      }, remaining);
       return () => clearTimeout(to);
     }
-  }, [endAtMs, conversation]);
+  }, [endAtMs, conversation, bestBid, basePrice, productName]);
 
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (status !== 'connected') return;
-    const summary = `Bids update: ${buyers
-      .map((b) => `${b.name}:${b.price}`)
-      .join(', ')}. Best: ${bestBid?.name ?? 'N/A'} at ${bestBid?.price ?? 'N/A'}.`;
-    void conversation.sendContextualUpdate(summary);
-  }, [buyers, bestBid, status, conversation]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const top = bestBid?.price ?? 0;
+      const txt = `Market update: product=${productName}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; note=Do not reveal competitor bids.`;
+      void conversation.sendContextualUpdate(txt);
+    }, 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [buyers, bestBid, status, conversation, productName, basePrice, stickerPrice]);
 
   const start = useCallback(async (): Promise<void> => {
     await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -131,13 +170,44 @@ export default function Page(): JSX.Element {
     await conversation.startSession({
       conversationToken: j.token,
       connectionType: 'webrtc',
+      dynamicVariables: {
+        product_name: productName,
+        base_price: basePrice,
+        sticker_price: stickerPrice,
+        policy_confidential_competition: true,
+      },
+      clientTools: {
+        get_market_state: (): string => {
+          const curr = stateRef.current;
+          const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null;
+          const bestPrice = best ? best.price : 0;
+          const hasAccepted = curr.accepted ? `accepted:${curr.accepted.buyerName}:${curr.accepted.price}` : 'accepted:none';
+          return `market_state product=${curr.productName} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true`;
+        },
+        get_current_bids: (): string => {
+          const curr = stateRef.current;
+          const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null;
+          const bestPrice = best ? best.price : 0;
+          return `policy=confidential; product=${curr.productName}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity.`;
+        },
+        get_thresholds: (): string => {
+          const curr = stateRef.current;
+          return `thresholds base=${curr.basePrice} sticker=${curr.stickerPrice}`;
+        },
+        get_negotiation_policy: (): string => {
+          const curr = stateRef.current;
+          const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null;
+          const top = best ? best.price : 0;
+          const target = Math.min(curr.stickerPrice, Math.max(curr.basePrice, top + 10));
+          return `policy confidential=true; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes.`;
+        },
+        set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
+      },
     });
     await conversation.sendContextualUpdate(
-      `Session start. Product: ${productName}. Base price: ${basePrice}. Initial bids: ${buyers
-        .map((b) => `${b.name}:${b.price}`)
-        .join(', ')}.`
+      `Session start. product=${productName}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}`
     );
-  }, [conversation, productName, basePrice, buyers]);
+  }, [conversation, productName, basePrice, buyers, stickerPrice, bestBid]);
 
   const endNow = useCallback(async (): Promise<void> => {
     await conversation.endSession();
@@ -159,6 +229,15 @@ export default function Page(): JSX.Element {
     },
     [conversation, productName, status]
   );
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    if (accepted) return;
+    if (!bestBid) return;
+    if (bestBid.price >= stickerPrice) {
+      void takeOffer(bestBid);
+    }
+  }, [status, accepted, bestBid, stickerPrice, takeOffer]);
 
   const endCallAcceptBest = useCallback(async (): Promise<void> => {
     if (status !== 'connected') return;
@@ -217,6 +296,16 @@ export default function Page(): JSX.Element {
             type="number"
             value={basePrice}
             onChange={(e) => setBasePrice(Number(e.target.value))}
+            disabled={status === 'connected'}
+            style={{ marginLeft: 8, width: 100 }}
+          />
+        </label>
+        <label>
+          Sticker Price
+          <input
+            type="number"
+            value={stickerPrice}
+            onChange={(e) => setStickerPrice(Number(e.target.value))}
             disabled={status === 'connected'}
             style={{ marginLeft: 8, width: 100 }}
           />
