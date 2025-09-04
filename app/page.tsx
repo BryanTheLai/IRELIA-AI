@@ -75,6 +75,17 @@ export default function Page(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    const newMin = Math.max(1, Math.floor(basePrice * 0.5));
+    const newMax = Math.ceil(basePrice * 2);
+    setBuyers((prev) =>
+      prev.map((b) => {
+        const clamped = Math.min(newMax, Math.max(newMin, b.price));
+        return clamped === b.price ? b : { ...b, price: clamped };
+      })
+    );
+  }, [basePrice]);
+
+  useEffect(() => {
     if (!freezeAtMs || slidersFrozen) return;
     const remaining = freezeAtMs - Date.now();
     if (remaining <= 0) {
@@ -109,12 +120,7 @@ export default function Page(): JSX.Element {
     const summary = `Bids update: ${buyers
       .map((b) => `${b.name}:${b.price}`)
       .join(', ')}. Best: ${bestBid?.name ?? 'N/A'} at ${bestBid?.price ?? 'N/A'}.`;
-    const controller = new AbortController();
-    const run = async (): Promise<void> => {
-      await conversation.sendContextualUpdate(summary);
-    };
-    void run();
-    return () => controller.abort();
+    void conversation.sendContextualUpdate(summary);
   }, [buyers, bestBid, status, conversation]);
 
   const start = useCallback(async (): Promise<void> => {
