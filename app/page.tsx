@@ -369,7 +369,6 @@ export default function Page(): React.JSX.Element {
             <div className="text-primary font-bold text-lg">
               <ScrambleText text="AGENT BELFORT" />
             </div>
-            <div className="text-xs text-muted-foreground font-mono">LIVE</div>
           </div>
           <div className="flex items-center gap-6 text-xs font-mono">
             <div className="text-muted-foreground">
