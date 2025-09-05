@@ -120,17 +120,75 @@ export default function Page(): React.JSX.Element {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
+    // Send live market updates (including user's offer) to the agent with a small debounce.
     if (status !== "connected") return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       const top = bestBid?.price ?? 0
-      const txt = `Market update: product=${productName}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; note=Do not reveal competitor bids.`
+      const txt = `Market update: product=${productName}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
       void conversation.sendContextualUpdate(txt)
     }, 300)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [buyers, bestBid, status, conversation, productName, basePrice, stickerPrice])
+  }, [buyers, bestBid, status, conversation, productName, basePrice, stickerPrice, userOffer])
+
+  // When sliders freeze, evaluate the finalization rules and either accept the user's offer
+  // (if it beats competitors and meets the minimum) or instruct the agent to continue persuading
+  useEffect(() => {
+    if (!slidersFrozen || status !== "connected") return
+
+    const top = bestBid?.price ?? 0
+
+    const handleFreeze = async () => {
+      try {
+        // Acceptance rule: user offer must be greater than current top competitor AND at/above minimum
+        if (userOffer > top && userOffer >= basePrice) {
+          const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
+          setAccepted(next)
+          setEndingSoon(true)
+          // Ask the agent (seller) to acknowledge and close the deal with the user
+          await conversation.sendUserMessage(
+            `Accept buyer (user) offer: ${userOffer} for ${productName}. Please acknowledge, confirm next steps, and close the deal.`,
+          )
+          setTimeout(() => {
+            void conversation.endSession()
+          }, 5000)
+          return
+        }
+
+        // Otherwise, instruct the agent to keep persuading the user to raise their offer.
+        const target = Math.max(basePrice, top)
+        await conversation.sendContextualUpdate(
+          `FREEZE: sliders locked; user_offer=${userOffer}; top_bid=${top}; min=${basePrice}; target=${target}; instruction=If user_offer < ${basePrice}, keep persuading the user to raise their bid at least to ${target} or to beat the top bid without revealing competitor identities. If user later offers >= Math.max(${basePrice}, top_bid+1), accept.`,
+        )
+      } catch (err) {
+        console.error("Error handling freeze logic:", err)
+      }
+    }
+
+    void handleFreeze()
+  }, [slidersFrozen, status, userOffer, bestBid, basePrice, conversation, productName])
+
+  // If sliders are frozen and the user raises their offer to meet the acceptance rule,
+  // accept immediately.
+  useEffect(() => {
+    if (!slidersFrozen || status !== "connected") return
+    if (accepted) return
+    const top = bestBid?.price ?? 0
+    if (userOffer > top && userOffer >= basePrice) {
+      const acceptNow = async () => {
+        const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
+        setAccepted(next)
+        setEndingSoon(true)
+        await conversation.sendUserMessage(
+          `Accept buyer (user) offer: ${userOffer} for ${productName}. Please acknowledge and close the deal.`,
+        )
+        setTimeout(() => void conversation.endSession(), 5000)
+      }
+      void acceptNow()
+    }
+  }, [userOffer, slidersFrozen, status, bestBid, basePrice, accepted, conversation, productName])
 
   const start = useCallback(async (): Promise<void> => {
     try {
