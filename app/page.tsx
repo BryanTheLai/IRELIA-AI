@@ -590,7 +590,7 @@ export default function Page(): React.JSX.Element {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
+          <div className="grid grid-cols-3 gap-4 text-xs font-mono">
             <div className="space-y-2">
               <div className="text-muted-foreground" title="How long the AI agent has been active">
                 UPTIME:
