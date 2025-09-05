@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 
 type Buyer = {
   id: number
@@ -27,6 +28,9 @@ type Accepted = {
 
 export default function Page(): React.JSX.Element {
   const [productName, setProductName] = useState<string>("Arasaka Mantis Blades")
+  const [productDescription, setProductDescription] = useState<string>(
+    "High-quality, refurbished cybernetic Mantis Blades with minor wear; includes 30-day warranty and installation support.",
+  )
   const [basePrice, setBasePrice] = useState<number>(6000)
   const [stickerPrice, setStickerPrice] = useState<number>(8000)
   const [userOffer, setUserOffer] = useState<number>(0)
@@ -46,6 +50,7 @@ export default function Page(): React.JSX.Element {
 
   const stateRef = useRef({
     productName,
+  productDescription,
     basePrice,
     stickerPrice,
     buyers,
@@ -89,6 +94,9 @@ export default function Page(): React.JSX.Element {
     stateRef.current.productName = productName
   }, [productName])
   useEffect(() => {
+    stateRef.current.productDescription = productDescription
+  }, [productDescription])
+  useEffect(() => {
     stateRef.current.basePrice = basePrice
   }, [basePrice])
   useEffect(() => {
@@ -124,7 +132,7 @@ export default function Page(): React.JSX.Element {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       const top = bestBid?.price ?? 0
-      const txt = `Market update: product=${productName}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; note=Do not reveal competitor bids.`
+  const txt = `Market update: product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; note=Do not reveal competitor bids.`
       void conversation.sendContextualUpdate(txt)
     }, 300)
     return () => {
@@ -157,6 +165,7 @@ export default function Page(): React.JSX.Element {
         connectionType: "webrtc",
         dynamicVariables: {
           product_name: productName,
+          product_description: productDescription,
           base_price: basePrice,
           sticker_price: stickerPrice,
           policy_confidential_competition: true,
@@ -169,13 +178,13 @@ export default function Page(): React.JSX.Element {
             const hasAccepted = curr.accepted
               ? `accepted:${curr.accepted.buyerName}:${curr.accepted.price}`
               : "accepted:none"
-            return `market_state product=${curr.productName} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true user_offer=${curr.userOffer}`
+            return `market_state product=${curr.productName} description=${curr.productDescription} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true user_offer=${curr.userOffer}`
           },
           get_current_bids: (): string => {
             const curr = stateRef.current
             const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
             const bestPrice = best ? best.price : 0
-            return `policy=confidential; product=${curr.productName}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity. user_offer=${curr.userOffer}`
+            return `policy=confidential; product=${curr.productName}; description=${curr.productDescription}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity. user_offer=${curr.userOffer}`
           },
           get_thresholds: (): string => {
             const curr = stateRef.current
@@ -186,14 +195,14 @@ export default function Page(): React.JSX.Element {
             const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
             const top = best ? best.price : 0
             const target = Math.min(curr.stickerPrice, Math.max(curr.basePrice, top + 10))
-            return `policy confidential=true; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. user_offer=${curr.userOffer}`
+            return `policy confidential=true; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. product_description=${curr.productDescription} user_offer=${curr.userOffer}`
           },
           set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
         },
       })
 
       await conversation.sendContextualUpdate(
-        `Session start. product=${productName}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}; user_offer=${userOffer}`,
+  `Session start. product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}; user_offer=${userOffer}`,
       )
     } catch (err) {
       console.error("[v0] Error starting conversation:", err)
@@ -216,7 +225,7 @@ export default function Page(): React.JSX.Element {
       setSlidersFrozen(true)
       setEndingSoon(true)
       await conversation.sendUserMessage(
-        `I am taking ${buyer.name}'s offer at ${buyer.price} for ${productName}. Please acknowledge and close the deal.`,
+  `I am taking ${buyer.name}'s offer at ${buyer.price} for ${productName}. Description: ${productDescription}. Please acknowledge and close the deal.`,
       )
       setTimeout(() => {
         void conversation.endSession()
@@ -233,7 +242,7 @@ export default function Page(): React.JSX.Element {
       setSlidersFrozen(true)
       setEndingSoon(true)
       await conversation.sendUserMessage(
-        `Ending call and accepting the best current offer: ${bestBid.name} at ${bestBid.price} for ${productName}.`,
+  `Ending call and accepting the best current offer: ${bestBid.name} at ${bestBid.price} for ${productName}. Description: ${productDescription}.`,
       )
       setTimeout(() => {
         void conversation.endSession()
@@ -268,9 +277,8 @@ export default function Page(): React.JSX.Element {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="text-primary font-bold text-lg">
-              <ScrambleText text="AI SALES AGENT" />
+              <ScrambleText text="Second hand AI" />
             </div>
-            <div className="text-xs text-muted-foreground font-mono">v0.1.7 LIVE</div>
           </div>
           <div className="flex items-center gap-6 text-xs font-mono">
             <div className="text-muted-foreground">
@@ -278,7 +286,7 @@ export default function Page(): React.JSX.Element {
             </div>
             <div className="text-muted-foreground">
               LAST UPDATE:{" "}
-              {new Date().toLocaleString("en-US", {
+              {new Date().toLocaleString("en-SG", {
                 month: "2-digit",
                 day: "2-digit",
                 year: "numeric",
@@ -380,6 +388,21 @@ export default function Page(): React.JSX.Element {
                   className="bg-secondary border-border font-mono text-sm"
                   placeholder="e.g., iPhone 15, Consulting Service"
                 />
+                <div className="mt-2">
+                  <label
+                    className="block text-xs font-mono text-muted-foreground mb-2"
+                    title="A short description to help the AI agent sell the product"
+                  >
+                    PRODUCT DESCRIPTION
+                  </label>
+                  <Textarea
+                    value={productDescription}
+                    onChange={(e) => setProductDescription(e.target.value)}
+                    disabled={status === "connected"}
+                    className="bg-secondary border-border font-mono text-sm h-24"
+                    placeholder="Describe condition, included accessories, service details, guarantees..."
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
