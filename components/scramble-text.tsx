@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 interface ScrambleTextProps {
   text: string
@@ -12,6 +12,12 @@ const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
 export function ScrambleText({ text, className = "" }: ScrambleTextProps) {
   const [displayText, setDisplayText] = useState(text)
   const [isScrambling, setIsScrambling] = useState(false)
+
+  // Keep internal displayText in sync when the parent changes the `text` prop.
+  // Don't override while an active scramble animation is running.
+  useEffect(() => {
+    if (!isScrambling) setDisplayText(text)
+  }, [text, isScrambling])
 
   const scramble = () => {
     if (isScrambling) return
