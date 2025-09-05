@@ -367,7 +367,7 @@ export default function Page(): React.JSX.Element {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="text-primary font-bold text-lg">
-              <ScrambleText text="AI SALES AGENT" />
+              <ScrambleText text="AGENT BELFORT" />
             </div>
             <div className="text-xs text-muted-foreground font-mono">LIVE</div>
           </div>
@@ -461,7 +461,7 @@ export default function Page(): React.JSX.Element {
               className="text-sm font-mono text-primary mb-4"
               title="Configure what you're selling and your price limits"
             >
-              <ScrambleText text="SALES CONFIGURATION" />
+              <ScrambleText text="PRODUCT CONFIGURATION" />
             </h2>
 
             <div className="space-y-4">
@@ -583,7 +583,7 @@ export default function Page(): React.JSX.Element {
               className="text-sm font-mono text-primary mb-4"
               title="Real-time offers from potential buyers - adjust sliders to simulate changing market conditions"
             >
-              <ScrambleText text="LIVE BUYER OFFERS" />
+              <ScrambleText text="SIMULATE BUYER OFFERS" />
             </h2>
 
             <div className="space-y-4">
@@ -630,7 +630,7 @@ export default function Page(): React.JSX.Element {
               className="text-sm font-mono text-primary mb-4"
               title="Track the current negotiation status and best offers"
             >
-              <ScrambleText text="DEAL STATUS" />
+              <ScrambleText text="OFFER STATUS" />
             </h2>
 
             <div className="space-y-4">
