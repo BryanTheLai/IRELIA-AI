@@ -54,6 +54,18 @@ Grant microphone permission when prompted. Click "Start Voice Agent" to connect.
 - Build Command: `next build` (default)
 - Output: Next.js default (Serverless)
 
+## Troubleshooting: Mobile & WebRTC issues
+
+If you see "Failed to start AI agent: could not establish pc connection" on mobile, try the following:
+
+- Ensure the site is loaded over HTTPS (Vercel provides HTTPS by default). Mobile browsers block getUserMedia on insecure origins.
+- Use a modern browser: Chrome or Edge on Android, Safari on iOS. Some browsers have limited WebRTC support.
+- Allow microphone permission when prompted. If denied, refresh and accept the permission.
+- Network restrictions can block peer connections (public WiFi with strict filters). Try a mobile cellular network or a different WiFi network.
+- If issues persist, test on desktop to confirm whether the problem is mobile-specific.
+
+If you still see errors, check the server logs for the `/api/conversation-token` route and ensure `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` are set in Vercel Project Settings.
+
 ## Notes
 - Only one session per tab; Start is disabled when connected
 - Product name and base price can be configured before connecting

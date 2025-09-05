@@ -259,7 +259,23 @@ export default function Page(): React.JSX.Element {
       setError(null)
       setIsStarting(true)
 
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Require secure context for getUserMedia / WebRTC
+      if (typeof window !== "undefined" && !window.isSecureContext) {
+        throw new Error(
+          "Secure context required: microphone and WebRTC require HTTPS. If you're testing locally, use localhost or serve over HTTPS."
+        )
+      }
+
+      // Prompt for microphone permission early so mobile browsers show the native prompt
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true })
+      } catch (mediaErr) {
+        const msg = mediaErr instanceof Error ? mediaErr.message : String(mediaErr)
+        if (msg.includes("Permission" ) || msg.includes("NotAllowedError")) {
+          throw new Error("Microphone access denied — please allow microphone access and retry.")
+        }
+        throw new Error("Unable to access microphone: " + msg)
+      }
 
       const r = await fetch("/api/conversation-token", { cache: "no-store" })
 
@@ -274,88 +290,100 @@ export default function Page(): React.JSX.Element {
         throw new Error("No token received from server")
       }
 
-      await conversation.startSession({
-        conversationToken: j.token,
-        connectionType: "webrtc",
-        dynamicVariables: {
-          product_name: productName,
-          product_description: productDescription,
-          base_price: basePrice,
-          sticker_price: stickerPrice,
-          policy_confidential_competition: true,
-        },
-        clientTools: {
-          get_market_state: (): string => {
-            const curr = stateRef.current
-            const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-            const bestPrice = best ? best.price : 0
-            const hasAccepted = curr.accepted
-              ? `accepted:${curr.accepted.buyerName}:${curr.accepted.price}`
-              : "accepted:none"
-            return `market_state product=${curr.productName} description=${curr.productDescription} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true user_offer=${curr.userOffer}`
+      try {
+        await conversation.startSession({
+          conversationToken: j.token,
+          connectionType: "webrtc",
+          dynamicVariables: {
+            product_name: productName,
+            product_description: productDescription,
+            base_price: basePrice,
+            sticker_price: stickerPrice,
+            policy_confidential_competition: true,
           },
-          get_current_bids: (): string => {
-            const curr = stateRef.current
-            const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-            const bestPrice = best ? best.price : 0
-            return `policy=confidential; product=${curr.productName}; description=${curr.productDescription}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity. user_offer=${curr.userOffer}`
-          },
-          get_thresholds: (): string => {
-            const curr = stateRef.current
-            return `thresholds base=${curr.basePrice} sticker=${curr.stickerPrice}`
-          },
-          get_negotiation_policy: (): string => {
-            const curr = stateRef.current
-            const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-            const top = best ? best.price : 0
-            const target = Math.min(curr.stickerPrice, Math.max(curr.basePrice, top + 10))
-            return `policy confidential=true; product_description=${curr.productDescription}; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. user_offer=${curr.userOffer}`
-          },
-          set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
-          // NEW: allow the agent to report the numeric offer it heard from the caller.
-          // The agent can call set_user_offer({ offer: 199 }) or parse_user_offer({ text: "I can do $199" }).
-          set_user_offer: ({ offer }: { offer: number }): string => {
-            try {
-              const n = Math.max(0, Math.floor(Number(offer) || 0))
-              // update both ref and React state so UI updates immediately.
-              // Avoid setting identical values to reduce re-renders.
-              if (stateRef.current.userOffer !== n) {
-                stateRef.current.userOffer = n
-                setUserOffer(n)
-              }
-              console.info("[clientTool] set_user_offer called ->", n)
-              // emit a DOM event so you can observe tool calls from the browser console
+          clientTools: {
+            get_market_state: (): string => {
+              const curr = stateRef.current
+              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
+              const bestPrice = best ? best.price : 0
+              const hasAccepted = curr.accepted
+                ? `accepted:${curr.accepted.buyerName}:${curr.accepted.price}`
+                : "accepted:none"
+              return `market_state product=${curr.productName} description=${curr.productDescription} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true user_offer=${curr.userOffer}`
+            },
+            get_current_bids: (): string => {
+              const curr = stateRef.current
+              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
+              const bestPrice = best ? best.price : 0
+              return `policy=confidential; product=${curr.productName}; description=${curr.productDescription}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity. user_offer=${curr.userOffer}`
+            },
+            get_thresholds: (): string => {
+              const curr = stateRef.current
+              return `thresholds base=${curr.basePrice} sticker=${curr.stickerPrice}`
+            },
+            get_negotiation_policy: (): string => {
+              const curr = stateRef.current
+              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
+              const top = best ? best.price : 0
+              const target = Math.min(curr.stickerPrice, Math.max(curr.basePrice, top + 10))
+              return `policy confidential=true; product_description=${curr.productDescription}; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. user_offer=${curr.userOffer}`
+            },
+            set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
+            // NEW: allow the agent to report the numeric offer it heard from the caller.
+            // The agent can call set_user_offer({ offer: 199 }) or parse_user_offer({ text: "I can do $199" }).
+            set_user_offer: ({ offer }: { offer: number }): string => {
               try {
-                window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer: n } } }))
-              } catch {}
-              return `ok:reported:${n}`
-            } catch (e) {
-              return `error`
-            }
-          },
-          // Optional helper: agent can pass a raw transcript and let client extract the numeric value.
-          parse_user_offer: ({ text }: { text: string }): string => {
-            try {
-              const m = (text || "").match(/\$?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
-              const n = m ? Math.floor(Number(m[1])) : 0
-              if (n > 0) {
+                const n = Math.max(0, Math.floor(Number(offer) || 0))
+                // update both ref and React state so UI updates immediately.
+                // Avoid setting identical values to reduce re-renders.
                 if (stateRef.current.userOffer !== n) {
                   stateRef.current.userOffer = n
                   setUserOffer(n)
                 }
-                console.info("[clientTool] parse_user_offer parsed ->", n, "from\n", text)
+                console.info("[clientTool] set_user_offer called ->", n)
+                // emit a DOM event so you can observe tool calls from the browser console
                 try {
-                  window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text, parsed: n } } }))
+                  window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer: n } } }))
                 } catch {}
-                return `parsed:${n}`
+                return `ok:reported:${n}`
+              } catch (e) {
+                return `error`
               }
-              return `parsed:0`
-            } catch {
-              return `error`
-            }
+            },
+            // Optional helper: agent can pass a raw transcript and let client extract the numeric value.
+            parse_user_offer: ({ text }: { text: string }): string => {
+              try {
+                const m = (text || "").match(/\$?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
+                const n = m ? Math.floor(Number(m[1])) : 0
+                if (n > 0) {
+                  if (stateRef.current.userOffer !== n) {
+                    stateRef.current.userOffer = n
+                    setUserOffer(n)
+                  }
+                  console.info("[clientTool] parse_user_offer parsed ->", n, "from\n", text)
+                  try {
+                    window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text, parsed: n } } }))
+                  } catch {}
+                  return `parsed:${n}`
+                }
+                return `parsed:0`
+              } catch {
+                return `error`
+              }
+            },
           },
-        },
-      })
+        })
+      } catch (startErr) {
+        // Surface better, actionable guidance for common mobile/WebRTC failures
+        const errMsg = startErr instanceof Error ? startErr.message : String(startErr)
+        console.error("conversation.startSession failed:", startErr)
+        if (errMsg.includes("could not establish pc connection") || errMsg.toLowerCase().includes("pc connection")) {
+          throw new Error(
+            "Could not establish peer connection. Common causes: restrictive network (no STUN/TURN), unsupported browser on mobile, or blocked 3rd-party cookies. Try using Chrome/Edge on Android or Safari on iOS, ensure site is loaded over https, allow microphone, or try again on desktop."
+          )
+        }
+        throw startErr
+      }
 
       // Expose debug helpers for manual testing in the browser console.
       try {
@@ -401,7 +429,19 @@ export default function Page(): React.JSX.Element {
     } catch (err) {
       console.error("[v0] Error starting conversation:", err)
       const errorMessage = err instanceof Error ? err.message : "Unknown error occurred"
-      setError(`Failed to start AI agent: ${errorMessage}`)
+
+      // Provide more actionable UI messages for common error classes
+      if (errorMessage.includes("Microphone access denied")) {
+        setError("Failed to start AI agent: Microphone access denied. Please enable microphone permission for this site and retry.")
+      } else if (errorMessage.includes("Secure context required")) {
+        setError("Failed to start AI agent: Secure context required. Ensure you're visiting the site over HTTPS (Vercel provides HTTPS by default).")
+      } else if (errorMessage.includes("Could not establish peer connection") || errorMessage.toLowerCase().includes("pc connection")) {
+        setError(
+          "Failed to start AI agent: could not establish pc connection. Try a different network or browser (Chrome/Edge on Android, Safari on iOS), ensure you allowed the microphone, and retry."
+        )
+      } else {
+        setError(`Failed to start AI agent: ${errorMessage}`)
+      }
     } finally {
       setIsStarting(false)
     }
@@ -489,7 +529,7 @@ export default function Page(): React.JSX.Element {
               <ScrambleText text="BELFORT" />
             </div>
           </div>
-          <div className="flex items-center gap-6 text-xs font-mono">
+          <div className="flex items-center gap-6 text-xs font-mono px-4">
             <div className="text-muted-foreground">
               NEGOTIATION PLATFORM / <span className="text-primary">DASHBOARD</span>
             </div>
