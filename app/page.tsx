@@ -329,6 +329,20 @@ export default function Page(): React.JSX.Element {
     return `${m}:${sec}`
   }
 
+  // Format elapsed uptime (hours:minutes:seconds) since `connectedAt`.
+  // The previous UI used `fmtRemaining(connectedAt + 7200000)` which showed
+  // a countdown to a 2-hour mark, not the actual uptime. Use this for a true
+  // uptime display.
+  const fmtUptime = (): string => {
+    if (!connectedAt) return "00:00:00"
+    const ms = Math.max(0, now - connectedAt)
+    const s = Math.floor(ms / 1000)
+    const hours = Math.floor(s / 3600).toString().padStart(2, "0")
+    const minutes = Math.floor((s % 3600) / 60).toString().padStart(2, "0")
+    const seconds = (s % 60).toString().padStart(2, "0")
+    return `${hours}:${minutes}:${seconds}`
+  }
+
   const disabled = status !== "connected" || slidersFrozen || Boolean(accepted)
 
   return (
@@ -408,7 +422,7 @@ export default function Page(): React.JSX.Element {
               <div className="text-muted-foreground" title="How long the AI agent has been active">
                 UPTIME:
               </div>
-              <div className="text-green-400">{connectedAt ? fmtRemaining(connectedAt + 7200000) : "00:00:00"}</div>
+              <div className="text-green-400">{fmtUptime()}</div>
             </div>
             <div className="space-y-2">
               <div className="text-muted-foreground" title="Time until buyer offers are locked in">
