@@ -112,6 +112,29 @@ export default function Page(): React.JSX.Element {
     stateRef.current.userOffer = userOffer
   }, [userOffer])
 
+  // Rate-limited immediate market update helper so the agent sees near-real-time changes
+  const lastMarketUpdateAtRef = useRef<number>(0)
+  const sendMarketUpdate = useCallback(
+    (reason?: string) => {
+      try {
+        if (conversation.status !== "connected") return
+        const nowMs = Date.now()
+        // rate limit to avoid spamming during rapid slider moves
+        if (nowMs - lastMarketUpdateAtRef.current < 150) return
+        lastMarketUpdateAtRef.current = nowMs
+
+        const curr = stateRef.current
+        const best = [...(curr.buyers ?? [])].sort((a, b) => b.price - a.price)[0] ?? null
+        const bestPrice = best ? best.price : 0
+        const txt = `Market update: product=${curr.productName}; description=${curr.productDescription}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; reason=${reason ?? "update"}; note=Do not reveal competitor bids.`
+        void conversation.sendContextualUpdate(txt)
+      } catch (e) {
+        // best-effort only
+      }
+    },
+    [conversation],
+  )
+
   useEffect(() => {
     const newMin = Math.max(1, Math.floor(basePrice * 0.6))
     const newMax = Math.ceil(stickerPrice * 1.2)
@@ -254,7 +277,24 @@ export default function Page(): React.JSX.Element {
   }, [conversation, bestBid, productName, status])
 
   const onBuyerChange = (id: number, price: number): void => {
-    setBuyers((prev) => prev.map((b) => (b.id === id ? { ...b, price } : b)))
+    setBuyers((prev) => {
+      const next = prev.map((b) => (b.id === id ? { ...b, price } : b))
+      // Keep stateRef in sync immediately so clientTools read latest values
+      try {
+        stateRef.current.buyers = next
+      } catch (e) {
+        // ignore
+      }
+
+      // Notify agent of any buyer change (rate-limited inside sendMarketUpdate)
+      try {
+        sendMarketUpdate(`buyer_${id}_changed`)
+      } catch (e) {
+        // ignore
+      }
+
+      return next
+    })
   }
 
   const fmtRemaining = (targetMs: number | null): string => {
@@ -451,7 +491,16 @@ export default function Page(): React.JSX.Element {
                 <Input
                   type="number"
                   value={userOffer}
-                  onChange={(e) => setUserOffer(Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      setUserOffer(v)
+                      try {
+                        stateRef.current.userOffer = v
+                      } catch (er) {}
+                      try {
+                        sendMarketUpdate("user_offer_changed")
+                      } catch (er) {}
+                    }}
                   className="bg-secondary border-border font-mono text-sm"
                   placeholder="Enter your offer..."
                 />
