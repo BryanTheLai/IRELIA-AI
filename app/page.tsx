@@ -259,6 +259,28 @@ export default function Page(): React.JSX.Element {
       setError(null)
       setIsStarting(true)
 
+      // Reset UI/market state when user restarts the agent so previous-call
+      // values (accepted offer, user offer, frozen sliders, buyer prices)
+      // don't persist across sessions.
+      setAccepted(null)
+      setEndingSoon(false)
+      setUserOffer(0)
+      setSlidersFrozen(false)
+      setBuyers((prev) =>
+        prev.map((b) => {
+          const newMin = Math.max(1, Math.floor(basePrice))
+          const newMax = Math.ceil(stickerPrice * 2)
+          const resetPrice = Math.floor(
+            basePrice + (stickerPrice - basePrice) * 0.3 + Math.random() * (stickerPrice - basePrice) * 0.4,
+          )
+          const clamped = Math.min(newMax, Math.max(newMin, resetPrice))
+          return { ...b, price: clamped, min: newMin, max: newMax }
+        }),
+      )
+      // Keep the stateRef consistent with immediate UI reset
+      stateRef.current.userOffer = 0
+      stateRef.current.accepted = null
+
       // Require secure context for getUserMedia / WebRTC
       if (typeof window !== "undefined" && !window.isSecureContext) {
         throw new Error(
