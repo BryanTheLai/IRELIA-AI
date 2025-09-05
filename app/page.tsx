@@ -67,6 +67,18 @@ export default function Page(): React.JSX.Element {
     return sorted[0] ?? null
   }, [buyers])
 
+  // Provide stable array instances for Slider `value` props so we don't pass
+  // freshly-allocated arrays on every render. Passing a new array each render
+  // can cause Radix internal ref callbacks to fire repeatedly and trigger
+  // React state updates, leading to "Maximum update depth exceeded" errors.
+  const buyerValueMap = useMemo(() => {
+    const m: Record<number, number[]> = {}
+    buyers.forEach((b) => {
+      m[b.id] = [b.price]
+    })
+    return m
+  }, [buyers])
+
   const conversation = useConversation({
     onConnect: () => {
       setConnectedAt(Date.now())
@@ -273,11 +285,86 @@ export default function Page(): React.JSX.Element {
             return `policy confidential=true; product_description=${curr.productDescription}; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. user_offer=${curr.userOffer}`
           },
           set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
+          // NEW: allow the agent to report the numeric offer it heard from the caller.
+          // The agent can call set_user_offer({ offer: 199 }) or parse_user_offer({ text: "I can do $199" }).
+          set_user_offer: ({ offer }: { offer: number }): string => {
+            try {
+              const n = Math.max(0, Math.floor(Number(offer) || 0))
+              // update both ref and React state so UI updates immediately
+              stateRef.current.userOffer = n
+              setUserOffer(n)
+              console.info("[clientTool] set_user_offer called ->", n)
+              // emit a DOM event so you can observe tool calls from the browser console
+              try {
+                window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer: n } } }))
+              } catch {}
+              return `ok:reported:${n}`
+            } catch (e) {
+              return `error`
+            }
+          },
+          // Optional helper: agent can pass a raw transcript and let client extract the numeric value.
+          parse_user_offer: ({ text }: { text: string }): string => {
+            try {
+              const m = (text || "").match(/\$?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
+              const n = m ? Math.floor(Number(m[1])) : 0
+              if (n > 0) {
+                stateRef.current.userOffer = n
+                setUserOffer(n)
+                console.info("[clientTool] parse_user_offer parsed ->", n, "from\n", text)
+                try {
+                  window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text, parsed: n } } }))
+                } catch {}
+                return `parsed:${n}`
+              }
+              return `parsed:0`
+            } catch {
+              return `error`
+            }
+          },
         },
       })
 
+      // Expose debug helpers for manual testing in the browser console.
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        window.__simulateSetUserOffer = (offer: number) => {
+          console.info("[debug] Simulating set_user_offer ->", offer)
+          // call the client tool handler directly so behavior matches agent call
+          try {
+            // @ts-ignore
+            return conversation._internal?.clientTools?.set_user_offer?.({ offer })
+          } catch (e) {
+            // fallback: dispatch event
+            window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer } } }))
+            return `simulated:${offer}`
+          }
+        }
+
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        window.__simulateParseUserOffer = (text: string) => {
+          console.info("[debug] Simulating parse_user_offer ->", text)
+          try {
+            // @ts-ignore
+            return conversation._internal?.clientTools?.parse_user_offer?.({ text })
+          } catch (e) {
+            window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text } } }))
+            return `simulated:0`
+          }
+        }
+      } catch (e) {
+        // ignore in environments where window isn't writable
+      }
+
       await conversation.sendContextualUpdate(
         `Session start. product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}; user_offer=${userOffer}`,
+      )
+
+      // NEW: instruct the agent to call the tool when it detects a buyer price.
+      await conversation.sendContextualUpdate(
+        `INSTRUCTIONS TO AGENT: When the caller explicitly states a numeric offer (e.g., "I can do $200", "I offer 180"), call the client tool "set_user_offer" with { "offer": <number> } (or call "parse_user_offer" with the raw transcript). Do not announce that you are reporting the number to the UI. Update the UI silently and continue negotiation. Only call when you are confident the number is an offer.`,
       )
     } catch (err) {
       console.error("[v0] Error starting conversation:", err)
@@ -367,7 +454,7 @@ export default function Page(): React.JSX.Element {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="text-primary font-bold text-lg">
-              <ScrambleText text="AGENT BELFORT" />
+              <ScrambleText text="BELFORT" />
             </div>
           </div>
           <div className="flex items-center gap-6 text-xs font-mono">
@@ -599,7 +686,7 @@ export default function Page(): React.JSX.Element {
                   </div>
 
                   <Slider
-                    value={[buyer.price]}
+                    value={buyerValueMap[buyer.id]}
                     onValueChange={([value]) => onBuyerChange(buyer.id, value)}
                     min={Math.max(1, Math.floor(basePrice))}
                     max={Math.ceil(stickerPrice * 2)}
