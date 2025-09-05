@@ -98,6 +98,19 @@ export default function Page(): React.JSX.Element {
   const status = conversation.status
   const isSpeaking = conversation.isSpeaking
 
+  // Keep connectedAt and UI in sync with the conversation status. Some
+  // environments may not reliably fire onDisconnect; this effect ensures the
+  // UI reflects the real connection state and clears transient flags on loss.
+  useEffect(() => {
+    if (status === "connected") {
+      setConnectedAt((prev) => prev ?? Date.now())
+    } else {
+      setConnectedAt(null)
+      setSlidersFrozen(false)
+      setEndingSoon(false)
+    }
+  }, [status])
+
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250)
     return () => clearInterval(t)
@@ -177,22 +190,9 @@ export default function Page(): React.JSX.Element {
 
     const handleFreeze = async () => {
       try {
-        // Acceptance rule: user offer must be greater than current top competitor AND at/above minimum
-        if (userOffer > top && userOffer >= basePrice) {
-          const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
-          setAccepted(next)
-          setEndingSoon(true)
-          // Ask the agent (seller) to acknowledge and close the deal with the user
-          await conversation.sendUserMessage(
-            `Accept buyer (user) offer: ${userOffer} for ${productName} - ${productDescription}. Please acknowledge, confirm next steps, and close the deal.`,
-          )
-          setTimeout(() => {
-            void conversation.endSession()
-          }, 5000)
-          return
-        }
-
-        // Otherwise, instruct the agent to keep persuading the user to raise their offer.
+        // At freeze, always re-evaluate acceptance; the immediate-accept effect
+        // below handles acceptance generally, but repeat the contextual update to
+        // give the agent a chance to close or continue persuading.
         const target = Math.max(basePrice, top)
         await conversation.sendContextualUpdate(
           `FREEZE: sliders locked; product=${productName}; description=${productDescription}; user_offer=${userOffer}; top_bid=${top}; min=${basePrice}; target=${target}; instruction=If user_offer < ${basePrice}, keep persuading the user to raise their bid at least to ${target} or to beat the top bid without revealing competitor identities. If user later offers >= Math.max(${basePrice}, top_bid+1), accept.`,
@@ -226,6 +226,33 @@ export default function Page(): React.JSX.Element {
       void acceptNow()
     }
   }, [userOffer, slidersFrozen, status, bestBid, basePrice, accepted, conversation, productName, productDescription])
+
+  // Immediate acceptance: accept as soon as the user's offer strictly beats the
+  // top_bid and meets the minimum price, regardless of freeze state. This
+  // ensures the UI and backend finalize correctly if the agent lags or the
+  // freeze event isn't processed.
+  useEffect(() => {
+    if (status !== "connected") return
+    if (accepted) return
+    const top = bestBid?.price ?? 0
+    if (userOffer > top && userOffer >= basePrice) {
+      const finalize = async () => {
+        const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
+        setAccepted(next)
+        setSlidersFrozen(true)
+        setEndingSoon(true)
+        try {
+          await conversation.sendUserMessage(
+            `Accept buyer (user) offer: ${userOffer} for ${productName} - ${productDescription}. Please acknowledge and close the deal.`,
+          )
+        } catch (err) {
+          console.error("Error sending accept message:", err)
+        }
+        setTimeout(() => void conversation.endSession(), 5000)
+      }
+      void finalize()
+    }
+  }, [userOffer, status, bestBid, basePrice, accepted, conversation, productName, productDescription])
 
   const start = useCallback(async (): Promise<void> => {
     try {
@@ -290,9 +317,12 @@ export default function Page(): React.JSX.Element {
           set_user_offer: ({ offer }: { offer: number }): string => {
             try {
               const n = Math.max(0, Math.floor(Number(offer) || 0))
-              // update both ref and React state so UI updates immediately
-              stateRef.current.userOffer = n
-              setUserOffer(n)
+              // update both ref and React state so UI updates immediately.
+              // Avoid setting identical values to reduce re-renders.
+              if (stateRef.current.userOffer !== n) {
+                stateRef.current.userOffer = n
+                setUserOffer(n)
+              }
               console.info("[clientTool] set_user_offer called ->", n)
               // emit a DOM event so you can observe tool calls from the browser console
               try {
@@ -309,8 +339,10 @@ export default function Page(): React.JSX.Element {
               const m = (text || "").match(/\$?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
               const n = m ? Math.floor(Number(m[1])) : 0
               if (n > 0) {
-                stateRef.current.userOffer = n
-                setUserOffer(n)
+                if (stateRef.current.userOffer !== n) {
+                  stateRef.current.userOffer = n
+                  setUserOffer(n)
+                }
                 console.info("[clientTool] parse_user_offer parsed ->", n, "from\n", text)
                 try {
                   window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text, parsed: n } } }))
