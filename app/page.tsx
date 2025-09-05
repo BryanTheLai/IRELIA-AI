@@ -27,17 +27,18 @@ type Accepted = {
 } | null
 
 export default function Page(): React.JSX.Element {
-  const [productName, setProductName] = useState<string>("Arasaka Mantis Blades")
+  const [productName, setProductName] = useState<string>("Apple AirPods 4")
   const [productDescription, setProductDescription] = useState<string>(
-    "High-performance monomolecular blades optimized for close-quarters combat.",
+    "Latest-generation Apple wireless earbuds with improved sound, spatial audio, and longer battery life.",
   )
-  const [basePrice, setBasePrice] = useState<number>(6000)
-  const [stickerPrice, setStickerPrice] = useState<number>(8000)
+  // Assumption: use USD-like consumer pricing for earbuds
+  const [basePrice, setBasePrice] = useState<number>(149)
+  const [stickerPrice, setStickerPrice] = useState<number>(249)
   const [userOffer, setUserOffer] = useState<number>(0)
   const [buyers, setBuyers] = useState<Buyer[]>([
-    { id: 1, name: "Jackie", price: 6000, min: 6000, max: 8000 },
-    { id: 2, name: "Norinobu", price: 6400, min: 6000, max: 8000 },
-    { id: 3, name: "Myers", price: 6500, min: 6000, max: 8000 },
+    { id: 1, name: "Alice", price: 179, min: 149, max: 249 },
+    { id: 2, name: "Marcus", price: 189, min: 149, max: 249 },
+    { id: 3, name: "Chen", price: 199, min: 149, max: 249 },
   ])
   const [slidersFrozen, setSlidersFrozen] = useState<boolean>(false)
   const [accepted, setAccepted] = useState<Accepted>(null)
@@ -112,9 +113,23 @@ export default function Page(): React.JSX.Element {
     stateRef.current.userOffer = userOffer
   }, [userOffer])
 
+  // Ensure the target (sticker) price never falls below the configured minimum.
+  // When the user raises the minimum, bump the stickerPrice up to match so the
+  // UI and sliders remain consistent. This runs live as the user edits the config.
   useEffect(() => {
-    const newMin = Math.max(1, Math.floor(basePrice * 0.6))
-    const newMax = Math.ceil(stickerPrice * 1.2)
+    setStickerPrice((curr) => {
+      // Coerce to numbers and avoid infinite loops by only updating when necessary.
+      const min = Number(basePrice) || 0
+      return curr < min ? min : curr
+    })
+  }, [basePrice])
+
+  useEffect(() => {
+    // Use the user-configured minimum price as the slider minimum
+    // and allow buyer offers up to twice the target (sticker) price.
+    // Keep a floor of 1 to avoid invalid slider ranges.
+    const newMin = Math.max(1, Math.floor(basePrice))
+    const newMax = Math.ceil(stickerPrice * 2)
     setBuyers((prev) =>
       prev.map((b) => {
         const resetPrice = Math.floor(
@@ -426,7 +441,7 @@ export default function Page(): React.JSX.Element {
             </div>
             <div className="space-y-2">
               <div className="text-muted-foreground" title="Time until buyer offers are locked in">
-                FREEZE IN:
+                FINALIZE IN:
               </div>
               <div className="text-warning">{fmtRemaining(freezeAtMs)}</div>
             </div>
@@ -587,8 +602,8 @@ export default function Page(): React.JSX.Element {
                   <Slider
                     value={[buyer.price]}
                     onValueChange={([value]) => onBuyerChange(buyer.id, value)}
-                    min={Math.max(1, Math.floor(basePrice * 0.6))}
-                    max={Math.ceil(stickerPrice * 1.2)}
+                    min={Math.max(1, Math.floor(basePrice))}
+                    max={Math.ceil(stickerPrice * 2)}
                     step={1}
                     disabled={disabled}
                     className="mb-2"
