@@ -49,6 +49,18 @@ export default function Page(): React.JSX.Element {
   const [isStarting, setIsStarting] = useState<boolean>(false)
   const [showGuide, setShowGuide] = useState<boolean>(true)
 
+  // Track collapsed state for major cards so mobile users can minimize/expand
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
+    systemStatus: false,
+    productConfig: false,
+    buyers: false,
+    dealStatus: false,
+  })
+
+  const toggleCollapsed = (key: keyof typeof collapsed) => {
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
   const stateRef = useRef({
     productName,
   productDescription,
@@ -137,6 +149,23 @@ export default function Page(): React.JSX.Element {
   useEffect(() => {
     stateRef.current.userOffer = userOffer
   }, [userOffer])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 1024px)')
+    const handleChange = (e: MediaQueryListEvent) => {
+      if (e.matches) {
+        setCollapsed(prev => {
+          const newCollapsed = { ...prev }
+          Object.keys(newCollapsed).forEach(key => {
+            newCollapsed[key as keyof typeof newCollapsed] = false
+          })
+          return newCollapsed
+        })
+      }
+    }
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   // Ensure the target (sticker) price never falls below the configured minimum.
   // When the user raises the minimum, bump the stickerPrice up to match so the
@@ -609,10 +638,45 @@ export default function Page(): React.JSX.Element {
                 label="VOICE AGENT"
               />
               <StatusIndicator status={isSpeaking ? "online" : "offline"} label="AUDIO STREAM" />
+              <button
+                onClick={() => toggleCollapsed("systemStatus")}
+                aria-expanded={!collapsed.systemStatus}
+                className="ml-2 text-xs font-mono px-2 py-1 border rounded bg-secondary/30 lg:hidden"
+                title={collapsed.systemStatus ? "Expand" : "Minimize"}
+              >
+                {collapsed.systemStatus ? "+" : "−"}
+              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 text-xs font-mono">
+          <div className="space-y-2">
+            {error && (
+              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive mb-2">
+                ⚠️ {error}
+              </div>
+            )}
+
+            <Button
+              onClick={start}
+              disabled={status === "connected" || isStarting}
+              className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+              title="Start the AI voice agent to begin selling"
+            >
+              <ScrambleText text={isStarting ? "STARTING AGENT..." : "START AI SALES AGENT"} />
+            </Button>
+
+            <Button
+              onClick={endNow}
+              disabled={status !== "connected"}
+              className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+              title="Stop the AI agent and end the session"
+            >
+              <ScrambleText text="STOP AGENT" />
+            </Button>
+          </div>
+
+          <div className={collapsed.systemStatus ? "hidden lg:block" : ""}>
+            <div className="grid grid-cols-3 gap-4 text-xs font-mono">
             <div className="space-y-2">
               <div className="text-muted-foreground" title="How long the AI agent has been active">
                 UPTIME:
@@ -632,19 +696,139 @@ export default function Page(): React.JSX.Element {
               <div className="text-destructive">{fmtRemaining(endAtMs)}</div>
             </div>
           </div>
+          </div>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* DEAL STATUS */}
+          <Card className="terminal-border p-4">
+            <div className="flex items-center justify-between">
+              <h2
+                className="text-sm font-mono text-primary mb-4"
+                title="Track the current negotiation status and best offers"
+              >
+                <ScrambleText text="OFFER STATUS" />
+              </h2>
+              <button
+                onClick={() => toggleCollapsed("dealStatus")}
+                aria-expanded={!collapsed.dealStatus}
+                className="ml-2 text-xs font-mono px-2 py-1 border rounded bg-secondary/30 lg:hidden"
+                title={collapsed.dealStatus ? "Expand" : "Minimize"}
+              >
+                {collapsed.dealStatus ? "+" : "−"}
+              </button>
+            </div>
+
+            {!collapsed.dealStatus && (
+              <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-xs font-mono text-muted-foreground" title="Current phase of the negotiation">
+                  NEGOTIATION PHASE
+                </div>
+                <div className="text-sm font-mono text-foreground">
+                  {status === "connected" ? (
+                    slidersFrozen ? (
+                      <span className="text-warning">CLOSING_DEAL</span>
+                    ) : (
+                      <span className="text-green-400">ACTIVE_NEGOTIATION</span>
+                    )
+                  ) : (
+                    <span className="text-muted-foreground">WAITING_TO_START</span>
+                  )}
+                </div>
+              </div>
+
+              {userOffer > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-mono text-muted-foreground" title="Your current offer">
+                    YOUR OFFER
+                  </div>
+                  <div className="text-lg font-mono text-blue-400">${userOffer}</div>
+                  <div className="text-xs font-mono text-muted-foreground">
+                    STATUS: {userOffer >= (bestBid?.price || 0) ? "🏆 HIGHEST" : "📈 COMPETING"}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <div
+                  className="text-xs font-mono text-muted-foreground"
+                  title="The highest offer currently on the table"
+                >
+                  BEST CURRENT OFFER
+                </div>
+                <div className="text-lg font-mono text-primary">{bestBid ? `$${bestBid.price}` : "--"}</div>
+                {bestBid && (
+                  <div className="text-xs font-mono text-muted-foreground">
+                    FROM: <ScrambleText text={bestBid.name} />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-mono text-muted-foreground" title="Short product description">
+                  PRODUCT DESCRIPTION
+                </div>
+                <div className="text-sm font-mono text-foreground">{productDescription}</div>
+              </div>
+
+              {accepted && (
+                <div className="border border-green-500/50 rounded p-3 bg-green-500/10">
+                  <div className="text-xs font-mono text-green-400 mb-1">✅ DEAL CLOSED</div>
+                  <div className="text-sm font-mono text-foreground">
+                    SOLD TO: <ScrambleText text={accepted.buyerName} /> @ ${accepted.price}
+                  </div>
+                </div>
+              )}
+
+              {endingSoon && (
+                <div className="border border-warning/50 rounded p-3 bg-warning/10">
+                  <div className="text-xs font-mono text-warning">⏰ FINALIZING DEAL...</div>
+                </div>
+              )}
+
+              <Button
+                onClick={endCallAcceptBest}
+                disabled={status !== "connected"}
+                className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+                title="End the negotiation and accept the highest current offer"
+              >
+                <ScrambleText text="CLOSE DEAL - ACCEPT BEST OFFER" />
+              </Button>
+              </div>
+
+            )}
+
+            <div className="mt-4 p-3 bg-blue-500/10 rounded border border-blue-500/30">
+              <div className="text-xs font-mono text-blue-300 mb-2">ℹ️ ABOUT THIS DEMO:</div>
+              <div className="text-xs text-foreground leading-relaxed">
+                This AI agent negotiates with voice callers to sell your product. The buyer offers simulate real market
+                competition during calls.
+              </div>
+            </div>
+          </Card>
+
           {/* Sales Configuration */}
           <Card className="terminal-border p-4">
-            <h2
-              className="text-sm font-mono text-primary mb-4"
-              title="Configure what you're selling and your price limits"
-            >
-              <ScrambleText text="PRODUCT CONFIGURATION" />
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2
+                className="text-sm font-mono text-primary mb-4"
+                title="Configure what you're selling and your price limits"
+              >
+                <ScrambleText text="PRODUCT CONFIGURATION" />
+              </h2>
+              <button
+                onClick={() => toggleCollapsed("productConfig")}
+                aria-expanded={!collapsed.productConfig}
+                className="ml-2 text-xs font-mono px-2 py-1 border rounded bg-secondary/30 lg:hidden"
+                title={collapsed.productConfig ? "Expand" : "Minimize"}
+              >
+                {collapsed.productConfig ? "+" : "−"}
+              </button>
+            </div>
 
-            <div className="space-y-4">
+            {!collapsed.productConfig && (
+              <div className="space-y-4">
               <div>
                 <label
                   className="block text-xs font-mono text-muted-foreground mb-2"
@@ -728,46 +912,32 @@ export default function Page(): React.JSX.Element {
                   placeholder="Enter your offer..."
                 />
               </div>
-
-              <div className="space-y-2">
-                {error && (
-                  <div className="p-3 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive mb-2">
-                    ⚠️ {error}
-                  </div>
-                )}
-
-                <Button
-                  onClick={start}
-                  disabled={status === "connected" || isStarting}
-                  className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
-                  title="Start the AI voice agent to begin selling"
-                >
-                  <ScrambleText text={isStarting ? "STARTING AGENT..." : "START AI SALES AGENT"} />
-                </Button>
-
-                <Button
-                  onClick={endNow}
-                  disabled={status !== "connected"}
-                  className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
-                  title="Stop the AI agent and end the session"
-                >
-                  <ScrambleText text="STOP AGENT" />
-                </Button>
               </div>
-            </div>
+            )}
           </Card>
 
-          {/* Live Buyer Offers */}
+          {/* SIMULATE BUYER OFFERS */}
           <Card className="terminal-border p-4">
-            <h2
-              className="text-sm font-mono text-primary mb-4"
-              title="Real-time offers from potential buyers - adjust sliders to simulate changing market conditions"
-            >
-              <ScrambleText text="SIMULATE BUYER OFFERS" />
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2
+                className="text-sm font-mono text-primary mb-4"
+                title="Real-time offers from potential buyers - adjust sliders to simulate changing market conditions"
+              >
+                <ScrambleText text="SIMULATE BUYER OFFERS" />
+              </h2>
+              <button
+                onClick={() => toggleCollapsed("buyers")}
+                aria-expanded={!collapsed.buyers}
+                className="ml-2 text-xs font-mono px-2 py-1 border rounded bg-secondary/30 lg:hidden"
+                title={collapsed.buyers ? "Expand" : "Minimize"}
+              >
+                {collapsed.buyers ? "+" : "−"}
+              </button>
+            </div>
 
-            <div className="space-y-4">
-              {buyers.map((buyer) => (
+            {!collapsed.buyers && (
+              <div className="space-y-4">
+                {buyers.map((buyer) => (
                 <div key={buyer.id} className="border border-border/50 rounded p-3 bg-secondary/30">
                   <div className="flex items-center justify-between mb-2">
                     <div
@@ -801,102 +971,8 @@ export default function Page(): React.JSX.Element {
                   </Button>
                 </div>
               ))}
-            </div>
-          </Card>
-
-          {/* Deal Status */}
-          <Card className="terminal-border p-4">
-            <h2
-              className="text-sm font-mono text-primary mb-4"
-              title="Track the current negotiation status and best offers"
-            >
-              <ScrambleText text="OFFER STATUS" />
-            </h2>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-xs font-mono text-muted-foreground" title="Current phase of the negotiation">
-                  NEGOTIATION PHASE
-                </div>
-                <div className="text-sm font-mono text-foreground">
-                  {status === "connected" ? (
-                    slidersFrozen ? (
-                      <span className="text-warning">CLOSING_DEAL</span>
-                    ) : (
-                      <span className="text-green-400">ACTIVE_NEGOTIATION</span>
-                    )
-                  ) : (
-                    <span className="text-muted-foreground">WAITING_TO_START</span>
-                  )}
-                </div>
               </div>
-
-              {userOffer > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-mono text-muted-foreground" title="Your current offer">
-                    YOUR OFFER
-                  </div>
-                  <div className="text-lg font-mono text-blue-400">${userOffer}</div>
-                  <div className="text-xs font-mono text-muted-foreground">
-                    STATUS: {userOffer >= (bestBid?.price || 0) ? "🏆 HIGHEST" : "📈 COMPETING"}
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <div
-                  className="text-xs font-mono text-muted-foreground"
-                  title="The highest offer currently on the table"
-                >
-                  BEST CURRENT OFFER
-                </div>
-                <div className="text-lg font-mono text-primary">{bestBid ? `$${bestBid.price}` : "--"}</div>
-                {bestBid && (
-                  <div className="text-xs font-mono text-muted-foreground">
-                    FROM: <ScrambleText text={bestBid.name} />
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs font-mono text-muted-foreground" title="Short product description">
-                  PRODUCT DESCRIPTION
-                </div>
-                <div className="text-sm font-mono text-foreground">{productDescription}</div>
-              </div>
-
-              {accepted && (
-                <div className="border border-green-500/50 rounded p-3 bg-green-500/10">
-                  <div className="text-xs font-mono text-green-400 mb-1">✅ DEAL CLOSED</div>
-                  <div className="text-sm font-mono text-foreground">
-                    SOLD TO: <ScrambleText text={accepted.buyerName} /> @ ${accepted.price}
-                  </div>
-                </div>
-              )}
-
-              {endingSoon && (
-                <div className="border border-warning/50 rounded p-3 bg-warning/10">
-                  <div className="text-xs font-mono text-warning">⏰ FINALIZING DEAL...</div>
-                </div>
-              )}
-
-              <Button
-                onClick={endCallAcceptBest}
-                disabled={status !== "connected"}
-                className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
-                title="End the negotiation and accept the highest current offer"
-              >
-                <ScrambleText text="CLOSE DEAL - ACCEPT BEST OFFER" />
-              </Button>
-            </div>
-
-            <div className="mt-4 p-3 bg-blue-500/10 rounded border border-blue-500/30">
-              <div className="text-xs font-mono text-blue-300 mb-2">ℹ️ ABOUT THIS DEMO:</div>
-              <div className="text-xs text-foreground leading-relaxed">
-                This AI agent negotiates with voice callers to sell your product. The buyer offers simulate real market
-                competition during calls.
-              </div>
-            </div>
+            )}
           </Card>
         </div>
       </div>
