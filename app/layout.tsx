@@ -19,7 +19,7 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: "Elaine Sales Agent - Voice Negotiation Prototype",
+  title: "IRELIA Sales Agent - Voice Negotiation Prototype",
   description: "AI-powered voice negotiation Prototype with ElevenLabs",
 }
 

@@ -799,7 +799,7 @@ export default function Page(): React.JSX.Element {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="text-primary font-bold text-lg">
-              <ScrambleText text="ELAINE" />
+              <ScrambleText text="IRELIA" />
             </div>
           </div>
           <div className="flex items-center gap-6 text-xs font-mono px-4">
