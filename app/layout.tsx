@@ -19,9 +19,8 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: "AI Sales Agent - Voice Negotiation Platform",
-  description: "AI-powered voice negotiation platform with ElevenLabs",
-  generator: "v0.app",
+  title: "Elaine Sales Agent - Voice Negotiation Prototype",
+  description: "AI-powered voice negotiation Prototype with ElevenLabs",
 }
 
 export default function RootLayout({
