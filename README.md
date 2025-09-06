@@ -21,7 +21,6 @@ Create `.env` from `.env.example` and fill these values:
 
 - ELEVENLABS_API_KEY= your ElevenLabs API key (server-side only)
 - ELEVENLABS_AGENT_ID= your Conversational AI Agent ID
-- OPENAI_API_KEY= optional; not required by this app directly
 
 Do not expose ELEVENLABS_API_KEY to the client. This app never ships that key to the browser.
 
@@ -44,7 +43,6 @@ Grant microphone permission when prompted (site must be HTTPS or localhost). Cli
 - `useConversation.startSession({ conversationToken, connectionType: 'webrtc' })`
 - Slider changes trigger `sendContextualUpdate` containing current bids
 - Every second, a snapshot is sent if the market changed; otherwise a lightweight heartbeat is sent ~every 15s to detect silent drops
-- At 1:30, sliders freeze and a freeze update is sent
 - At 2:00, session ends gracefully
 
 ## Deployment (Vercel)
