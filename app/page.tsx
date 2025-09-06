@@ -104,7 +104,7 @@ export default function Page(): React.JSX.Element {
       // Reset the last snapshot on new connection
       stateRef.current.lastSnapshot = ''
       sendErrorStreakRef.current = 0
-      lastHeartbeatAtRef.current = 0
+      lastHeartbeatAtRef.current = now
     },
     onDisconnect: (details?: unknown) => {
       setConnectedAt(null)
@@ -248,12 +248,15 @@ export default function Page(): React.JSX.Element {
 
   useEffect(() => {
     const onOffline = () => {
-      console.warn("[network] offline")
-      notifyDisconnect("Network offline.")
-      setConnectedAt(null)
-      setSlidersFrozen(false)
-      setEndingSoon(false)
-      setAccepted(null)
+      // Only notify if agent has been started
+      if (connectedAt !== null) {
+        console.warn("[network] offline")
+        notifyDisconnect("Network offline.")
+        setConnectedAt(null)
+        setSlidersFrozen(false)
+        setEndingSoon(false)
+        setAccepted(null)
+      }
     }
     const onOnline = () => {
       console.info("[network] online")
@@ -264,7 +267,7 @@ export default function Page(): React.JSX.Element {
       window.removeEventListener("offline", onOffline)
       window.removeEventListener("online", onOnline)
     }
-  }, [notifyDisconnect])
+  }, [notifyDisconnect, connectedAt])
 
   // Watchdog: detect silent disconnects (e.g., background tab suspends timers or
   // peer connection dies) and normalize UI state with a notification.
