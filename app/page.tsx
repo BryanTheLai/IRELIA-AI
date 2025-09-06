@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useToast } from "@/hooks/use-toast"
 import { useConversation } from "@elevenlabs/react"
 import { ScrambleText } from "@/components/scramble-text"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -48,6 +49,21 @@ export default function Page(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [isStarting, setIsStarting] = useState<boolean>(false)
   const [showGuide, setShowGuide] = useState<boolean>(true)
+  const { toast } = useToast()
+
+  // Throttled disconnect notification to avoid duplicate toasts when multiple
+  // sources (onDisconnect, status effect, manual stop) fire around the same time.
+  const lastDisconnectToastAtRef = useRef<number>(0)
+  const notifyDisconnect = useCallback((reason?: string) => {
+    const nowTs = Date.now()
+    if (nowTs - (lastDisconnectToastAtRef.current || 0) < 1500) return
+    lastDisconnectToastAtRef.current = nowTs
+    console.warn("Agent Disconnected:", reason || "The AI sales agent has disconnected.")
+    toast({
+      title: "Agent Disconnected",
+      description: reason || "The AI sales agent has disconnected.",
+    })
+  }, [toast])
 
   // Track collapsed state for major cards so mobile users can minimize/expand
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
@@ -63,21 +79,92 @@ export default function Page(): React.JSX.Element {
 
   const stateRef = useRef({
     productName,
-  productDescription,
+    productDescription,
     basePrice,
     stickerPrice,
     buyers,
     accepted,
     userOffer,
+    lastSnapshot: '' as string,
   })
 
-  const freezeAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 90_000 : null), [connectedAt])
-  const endAtMs = useMemo<number | null>(() => (connectedAt ? connectedAt + 120_000 : null), [connectedAt])
+  const sendErrorStreakRef = useRef<number>(0)
+  const lastHeartbeatAtRef = useRef<number>(0)
+
+  const conversation = useConversation({
+    onConnect: () => {
+      const now = Date.now()
+      setConnectedAt(now)
+      setSlidersFrozen(false)
+      setAccepted(null)
+      setEndingSoon(false)
+  // Hide first-time guide after first successful connect so it doesn't
+  // pop back open on auto stop/disconnect within the same visit
+  setShowGuide(false)
+      // Reset the last snapshot on new connection
+      stateRef.current.lastSnapshot = ''
+      sendErrorStreakRef.current = 0
+      lastHeartbeatAtRef.current = 0
+    },
+    onDisconnect: (details?: unknown) => {
+      setConnectedAt(null)
+      setSlidersFrozen(false)
+      setEndingSoon(false)
+      // Clear snapshot state on disconnect
+      stateRef.current.lastSnapshot = ''
+      const reason = (details && typeof details === 'object') ?
+        (('message' in details && String((details as { message?: unknown }).message)) ||
+         ('reason' in details && String((details as { reason?: unknown }).reason)) ||
+         undefined)
+        : undefined
+      notifyDisconnect(reason)
+    },
+    onMessage: () => {},
+    onError: (error) => {
+      console.error("Conversation error:", error)
+      const msg = (error && typeof error === 'object' && 'message' in error)
+        ? String((error as { message?: unknown }).message)
+        : String(error)
+      notifyDisconnect(msg)
+      setSlidersFrozen(false)
+      setEndingSoon(false)
+    },
+  })
+
+  const status = conversation.status
+  const isSpeaking = conversation.isSpeaking
+
+  const freezeAtMs = useMemo<number | null>(() => {
+    // Only calculate freeze time if we have a valid, recent connection timestamp
+    if (!connectedAt || status !== "connected") return null
+    return connectedAt + 90_000
+  }, [connectedAt, status])
+  
+  const endAtMs = useMemo<number | null>(() => {
+    // Only calculate end time if we have a valid, recent connection timestamp
+    if (!connectedAt || status !== "connected") return null
+    return connectedAt + 120_000
+  }, [connectedAt, status])
 
   const bestBid = useMemo(() => {
     const sorted = [...buyers].sort((a, b) => b.price - a.price)
     return sorted[0] ?? null
   }, [buyers])
+  
+  // Notify user when top bid changes
+  const prevTopRef = useRef<number>(bestBid?.price ?? 0)
+  useEffect(() => {
+    const top = bestBid?.price ?? 0
+    const prev = prevTopRef.current
+    if (status === "connected" && top !== prev && prev !== 0) {
+      toast({
+        title: `Another buyer just raised their offer`,
+        description: `Current top bid is $${top}. Would you match or exceed that?`,
+        duration: 5000,
+      })
+    }
+    prevTopRef.current = top
+  }, [bestBid, toast, status])
 
   // Provide stable array instances for Slider `value` props so we don't pass
   // freshly-allocated arrays on every render. Passing a new array each render
@@ -91,29 +178,59 @@ export default function Page(): React.JSX.Element {
     return m
   }, [buyers])
 
-  const conversation = useConversation({
-    onConnect: () => {
-      setConnectedAt(Date.now())
-      setSlidersFrozen(false)
-      setAccepted(null)
-      setEndingSoon(false)
-    },
-    onDisconnect: () => {
-      setConnectedAt(null)
-      setSlidersFrozen(false)
-      setEndingSoon(false)
-    },
-    onMessage: () => {},
-    onError: () => {},
-  })
-
-  const status = conversation.status
-  const isSpeaking = conversation.isSpeaking
+  // Helper: wait until the agent finishes speaking or a timeout elapses.
+  // This is safer than a fixed delay and avoids cutting the agent off.
+  const waitForAgentToFinishSpeaking = async (maxWaitMs = 8000): Promise<void> => {
+    const pollMs = 200
+    const start = Date.now()
+    
+    // Use a more robust polling approach with proper error handling
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        // Check if conversation is still valid and connected
+        if (status !== "connected") return
+        
+        // Use the conversation object's isSpeaking flag where possible.
+        if (!conversation.isSpeaking) return
+      } catch (error) {
+        // If accessing the property fails for any reason, still continue polling
+        console.debug("Error checking isSpeaking status:", error)
+      }
+      
+      // Also short-circuit if local snapshot says not speaking
+      if (!isSpeaking) return
+      
+      // Use AbortController-compatible delay for better cleanup
+      try {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, pollMs)
+          // Store timer reference for potential cleanup
+          return timer
+        })
+      } catch (error) {
+        console.debug("Error in speaking poll delay:", error)
+        return
+      }
+    }
+    
+    console.debug(`waitForAgentToFinishSpeaking timed out after ${maxWaitMs}ms`)
+  }
 
   // Keep connectedAt and UI in sync with the conversation status. Some
   // environments may not reliably fire onDisconnect; this effect ensures the
   // UI reflects the real connection state and clears transient flags on loss.
+  const prevStatusRef = useRef(status)
   useEffect(() => {
+    const prev = prevStatusRef.current
+    // Notify when leaving a connected state even if onDisconnect doesn't fire
+    if (prev === "connected" && status !== "connected") {
+      notifyDisconnect()
+      // Reflect disconnected state in UI immediately
+      setSlidersFrozen(false)
+      setEndingSoon(false)
+      setAccepted(null)
+    }
+
     if (status === "connected") {
       setConnectedAt((prev) => prev ?? Date.now())
     } else {
@@ -121,12 +238,122 @@ export default function Page(): React.JSX.Element {
       setSlidersFrozen(false)
       setEndingSoon(false)
     }
-  }, [status])
+    prevStatusRef.current = status
+  }, [status, notifyDisconnect])
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250)
     return () => clearInterval(t)
   }, [])
+
+  useEffect(() => {
+    const onOffline = () => {
+      console.warn("[network] offline")
+      notifyDisconnect("Network offline.")
+      setConnectedAt(null)
+      setSlidersFrozen(false)
+      setEndingSoon(false)
+      setAccepted(null)
+    }
+    const onOnline = () => {
+      console.info("[network] online")
+    }
+    window.addEventListener("offline", onOffline)
+    window.addEventListener("online", onOnline)
+    return () => {
+      window.removeEventListener("offline", onOffline)
+      window.removeEventListener("online", onOnline)
+    }
+  }, [notifyDisconnect])
+
+  // Watchdog: detect silent disconnects (e.g., background tab suspends timers or
+  // peer connection dies) and normalize UI state with a notification.
+  useEffect(() => {
+    let lastSpokeAt = Date.now()
+    let watchdogTimer: number | undefined
+
+    const tick = () => {
+      // Track speaking activity when connected
+      if (status === "connected" && (conversation.isSpeaking || isSpeaking)) {
+        lastSpokeAt = Date.now()
+      }
+
+      // If we believe we're connected but no activity for a long time and
+      // ElevenLabs SDK status flipped under the hood, reconcile.
+      if (status === "connected") {
+        // If connectedAt exists but it's been > 10s since last activity AND
+        // the SDK reports not connected via status, notify.
+        const staleFor = Date.now() - lastSpokeAt
+        if (staleFor > 10000 && conversation.status !== "connected") {
+          console.warn("[watchdog] Detected silent disconnect (stale:", staleFor, "ms). Normalizing UI.")
+          notifyDisconnect("Connection lost.")
+          setConnectedAt(null)
+          setSlidersFrozen(false)
+          setEndingSoon(false)
+          setAccepted(null)
+        }
+      }
+    }
+
+    watchdogTimer = window.setInterval(tick, 1000)
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        // On resume to foreground, re-check status and normalize if needed
+        if (status !== "connected") {
+          console.info("[watchdog] Page visible; status:", status)
+          notifyDisconnect("Session is not active.")
+          setConnectedAt(null)
+          setSlidersFrozen(false)
+          setEndingSoon(false)
+          setAccepted(null)
+        }
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+
+    return () => {
+      if (watchdogTimer) window.clearInterval(watchdogTimer)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [status, isSpeaking, conversation, notifyDisconnect])
+
+  // Automatic freeze at 90 seconds
+  useEffect(() => {
+    if (!connectedAt || !freezeAtMs || slidersFrozen) return
+    
+    const timeUntilFreeze = freezeAtMs - Date.now()
+    if (timeUntilFreeze <= 0) {
+      setSlidersFrozen(true)
+      return
+    }
+    
+    const timer = setTimeout(() => {
+      setSlidersFrozen(true)
+    }, timeUntilFreeze)
+    
+    return () => clearTimeout(timer)
+  }, [connectedAt, freezeAtMs, slidersFrozen])
+
+  // Automatic session end at 120 seconds
+  useEffect(() => {
+    if (!connectedAt || !endAtMs || status !== "connected") return
+    
+    const timeUntilEnd = endAtMs - Date.now()
+    if (timeUntilEnd <= 0) {
+    // Proactively inform the user before ending to avoid a silent stop
+    notifyDisconnect("Session ended due to timeout.")
+    void conversation.endSession()
+      return
+    }
+    
+    const timer = setTimeout(() => {
+    notifyDisconnect("Session ended due to timeout.")
+    void conversation.endSession()
+    }, timeUntilEnd)
+    
+    return () => clearTimeout(timer)
+  }, [connectedAt, endAtMs, status, conversation, notifyDisconnect])
 
   useEffect(() => {
     stateRef.current.productName = productName
@@ -195,20 +422,110 @@ export default function Page(): React.JSX.Element {
     )
   }, [basePrice, stickerPrice])
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    // Send live market updates (including user's offer) to the agent with a small debounce.
+  // Market update sender - stabilized to prevent excessive effect recreation
+  const sendMarketUpdate = useCallback(async () => {
     if (status !== "connected") return
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      const top = bestBid?.price ?? 0
-  const txt = `Market update: product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
-      void conversation.sendContextualUpdate(txt)
-    }, 300)
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
+    
+    const top = bestBid?.price ?? 0
+    const snapshot = `${productName}|${productDescription}|${basePrice}|${stickerPrice}|${top}|${userOffer}`
+    
+    // Skip send if nothing important changed since last snapshot
+    const lastSnapshot = stateRef.current.lastSnapshot || ''
+    if (lastSnapshot === snapshot) {
+      const nowTs = Date.now()
+      if (nowTs - (lastHeartbeatAtRef.current || 0) >= 5000) {
+        try {
+          await conversation.sendContextualUpdate("[heartbeat]")
+          sendErrorStreakRef.current = 0
+        } catch (err) {
+          console.debug("Heartbeat failed:", err)
+          const msg = (err && typeof err === 'object' && 'message' in err)
+            ? String((err as { message?: unknown }).message)
+            : String(err)
+          if (msg.includes("RTCDataChannel") || msg.includes("readyState is not 'open'")) {
+            notifyDisconnect("Connection lost.")
+            setConnectedAt(null)
+            setSlidersFrozen(false)
+            setEndingSoon(false)
+            setAccepted(null)
+            sendErrorStreakRef.current = 0
+            try { await conversation.endSession() } catch {}
+          } else {
+            sendErrorStreakRef.current += 1
+            if (sendErrorStreakRef.current >= 2) {
+              notifyDisconnect("Connection lost.")
+              setConnectedAt(null)
+              setSlidersFrozen(false)
+              setEndingSoon(false)
+              setAccepted(null)
+              sendErrorStreakRef.current = 0
+              try { await conversation.endSession() } catch {}
+            }
+          }
+        } finally {
+          lastHeartbeatAtRef.current = nowTs
+        }
+      }
+      return
     }
-  }, [buyers, bestBid, status, conversation, productName, productDescription, basePrice, stickerPrice, userOffer])
+    
+    stateRef.current.lastSnapshot = snapshot
+    const txt = `Market update: product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
+    
+    try {
+      await conversation.sendContextualUpdate(txt)
+      sendErrorStreakRef.current = 0
+    } catch (err) {
+      console.debug("Error sending market update:", err)
+      const msg = (err && typeof err === 'object' && 'message' in err)
+        ? String((err as { message?: unknown }).message)
+        : String(err)
+      if (msg.includes("RTCDataChannel") || msg.includes("readyState is not 'open'")) {
+        notifyDisconnect("Connection lost.")
+        setConnectedAt(null)
+        setSlidersFrozen(false)
+        setEndingSoon(false)
+        setAccepted(null)
+        sendErrorStreakRef.current = 0
+        try { await conversation.endSession() } catch {}
+      } else {
+        sendErrorStreakRef.current += 1
+        if (sendErrorStreakRef.current >= 2) {
+          notifyDisconnect("Connection lost.")
+          setConnectedAt(null)
+          setSlidersFrozen(false)
+          setEndingSoon(false)
+          setAccepted(null)
+          sendErrorStreakRef.current = 0
+          try { await conversation.endSession() } catch {}
+        }
+      }
+    }
+  }, [status, conversation, bestBid, productName, productDescription, basePrice, stickerPrice, userOffer])
+
+  useEffect(() => {
+    // Send authoritative market snapshots to the agent every 1s while connected.
+    // These are contextual updates (background info) so the agent has a fresh
+    // view of top_bid, user_offer, and pricing without creating user-like
+    // messages that would interfere with conversational turn-taking.
+    if (status !== "connected") return
+
+    let stopped = false
+
+    const intervalSender = () => {
+      if (stopped) return
+      void sendMarketUpdate()
+    }
+
+    // send immediately, then every 1s
+    void sendMarketUpdate()
+    const t = setInterval(intervalSender, 1000)
+    
+    return () => {
+      stopped = true
+      clearInterval(t)
+    }
+  }, [status, sendMarketUpdate])
 
   // When sliders freeze, evaluate the finalization rules and either accept the user's offer
   // (if it beats competitors and meets the minimum) or instruct the agent to continue persuading
@@ -236,52 +553,39 @@ export default function Page(): React.JSX.Element {
 
 
 
-  // If sliders are frozen and the user raises their offer to meet the acceptance rule,
-  // accept immediately.
+  // Unified acceptance logic: accept as soon as the user's offer strictly beats the
+  // top_bid and meets the minimum price. This handles both immediate acceptance
+  // and post-freeze acceptance in a single, race-condition-free effect.
   useEffect(() => {
-    if (!slidersFrozen || status !== "connected") return
-    if (accepted) return
+    if (status !== "connected" || accepted) return
+    
     const top = bestBid?.price ?? 0
-  if (userOffer > top && userOffer >= basePrice) {
-      const acceptNow = async () => {
-        const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
-        setAccepted(next)
-        setEndingSoon(true)
-        await conversation.sendUserMessage(
-      `Accept buyer (user) offer: ${userOffer} for ${productName} - ${productDescription}. Please acknowledge and close the deal.`,
-        )
-        setTimeout(() => void conversation.endSession(), 5000)
-      }
-      void acceptNow()
-    }
-  }, [userOffer, slidersFrozen, status, bestBid, basePrice, accepted, conversation, productName, productDescription])
+    const shouldAccept = userOffer > top && userOffer >= basePrice
+    
+    if (!shouldAccept) return
 
-  // Immediate acceptance: accept as soon as the user's offer strictly beats the
-  // top_bid and meets the minimum price, regardless of freeze state. This
-  // ensures the UI and backend finalize correctly if the agent lags or the
-  // freeze event isn't processed.
-  useEffect(() => {
-    if (status !== "connected") return
-    if (accepted) return
-    const top = bestBid?.price ?? 0
-    if (userOffer > top && userOffer >= basePrice) {
-      const finalize = async () => {
-        const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
-        setAccepted(next)
-        setSlidersFrozen(true)
-        setEndingSoon(true)
-        try {
-          await conversation.sendUserMessage(
-            `Accept buyer (user) offer: ${userOffer} for ${productName} - ${productDescription}. Please acknowledge and close the deal.`,
-          )
-        } catch (err) {
-          console.error("Error sending accept message:", err)
-        }
-        setTimeout(() => void conversation.endSession(), 5000)
+    const finalize = async () => {
+      const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
+      setAccepted(next)
+      setSlidersFrozen(true)
+      setEndingSoon(true)
+      
+      try {
+        await conversation.sendUserMessage(
+          `I accept — I'll take ${productName} for $${userOffer}. Please proceed to close the deal.`,
+        )
+      } catch (err) {
+        console.error("Error sending accept message:", err)
       }
-      void finalize()
+      
+      // Wait for agent to finish speaking before ending session
+      void waitForAgentToFinishSpeaking()
+        .then(() => void conversation.endSession())
+        .catch(() => void conversation.endSession())
     }
-  }, [userOffer, status, bestBid, basePrice, accepted, conversation, productName, productDescription])
+    
+    void finalize()
+  }, [userOffer, status, bestBid, basePrice, accepted, conversation, productName, slidersFrozen])
 
   const start = useCallback(async (): Promise<void> => {
     try {
@@ -309,6 +613,7 @@ export default function Page(): React.JSX.Element {
       // Keep the stateRef consistent with immediate UI reset
       stateRef.current.userOffer = 0
       stateRef.current.accepted = null
+      stateRef.current.lastSnapshot = ''
 
       // Require secure context for getUserMedia / WebRTC
       if (typeof window !== "undefined" && !window.isSecureContext) {
@@ -353,35 +658,7 @@ export default function Page(): React.JSX.Element {
             policy_confidential_competition: true,
           },
           clientTools: {
-            get_market_state: (): string => {
-              const curr = stateRef.current
-              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-              const bestPrice = best ? best.price : 0
-              const hasAccepted = curr.accepted
-                ? `accepted:${curr.accepted.buyerName}:${curr.accepted.price}`
-                : "accepted:none"
-              return `market_state product=${curr.productName} description=${curr.productDescription} base=${curr.basePrice} sticker=${curr.stickerPrice} top_bid=${bestPrice} ${hasAccepted} confidential=true user_offer=${curr.userOffer}`
-            },
-            get_current_bids: (): string => {
-              const curr = stateRef.current
-              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-              const bestPrice = best ? best.price : 0
-              return `policy=confidential; product=${curr.productName}; description=${curr.productDescription}; base=${curr.basePrice}; sticker=${curr.stickerPrice}; top_bid=${bestPrice}; advise=user to beat top_bid without revealing competitor identity. user_offer=${curr.userOffer}`
-            },
-            get_thresholds: (): string => {
-              const curr = stateRef.current
-              return `thresholds base=${curr.basePrice} sticker=${curr.stickerPrice}`
-            },
-            get_negotiation_policy: (): string => {
-              const curr = stateRef.current
-              const best = [...curr.buyers].sort((a, b) => b.price - a.price)[0] ?? null
-              const top = best ? best.price : 0
-              const target = Math.min(curr.stickerPrice, Math.max(curr.basePrice, top + 10))
-              return `policy confidential=true; product_description=${curr.productDescription}; rule: accept_if_offer_>_or_=_sticker; otherwise_counter_towards=${target} without revealing competitors; if top_bid changes during call, say: 'demand increased; need an offer better than ${top}'; focus on closing by 2 minutes. user_offer=${curr.userOffer}`
-            },
-            set_phase: ({ phase }: { phase: string }): string => `phase:${phase}`,
-            // NEW: allow the agent to report the numeric offer it heard from the caller.
-            // The agent can call set_user_offer({ offer: 199 }) or parse_user_offer({ text: "I can do $199" }).
+            // allow the agent to report the numeric offer it heard
             set_user_offer: ({ offer }: { offer: number }): string => {
               try {
                 const n = Math.max(0, Math.floor(Number(offer) || 0))
@@ -401,27 +678,6 @@ export default function Page(): React.JSX.Element {
                 return `error`
               }
             },
-            // Optional helper: agent can pass a raw transcript and let client extract the numeric value.
-            parse_user_offer: ({ text }: { text: string }): string => {
-              try {
-                const m = (text || "").match(/\$?\s*([0-9]+(?:\.[0-9]{1,2})?)/)
-                const n = m ? Math.floor(Number(m[1])) : 0
-                if (n > 0) {
-                  if (stateRef.current.userOffer !== n) {
-                    stateRef.current.userOffer = n
-                    setUserOffer(n)
-                  }
-                  console.info("[clientTool] parse_user_offer parsed ->", n, "from\n", text)
-                  try {
-                    window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text, parsed: n } } }))
-                  } catch {}
-                  return `parsed:${n}`
-                }
-                return `parsed:0`
-              } catch {
-                return `error`
-              }
-            },
           },
         })
       } catch (startErr) {
@@ -437,46 +693,11 @@ export default function Page(): React.JSX.Element {
       }
 
       // Expose debug helpers for manual testing in the browser console.
-      try {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        window.__simulateSetUserOffer = (offer: number) => {
-          console.info("[debug] Simulating set_user_offer ->", offer)
-          // call the client tool handler directly so behavior matches agent call
-          try {
-            // @ts-ignore
-            return conversation._internal?.clientTools?.set_user_offer?.({ offer })
-          } catch (e) {
-            // fallback: dispatch event
-            window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer } } }))
-            return `simulated:${offer}`
-          }
-        }
-
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        window.__simulateParseUserOffer = (text: string) => {
-          console.info("[debug] Simulating parse_user_offer ->", text)
-          try {
-            // @ts-ignore
-            return conversation._internal?.clientTools?.parse_user_offer?.({ text })
-          } catch (e) {
-            window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "parse_user_offer", parameters: { text } } }))
-            return `simulated:0`
-          }
-        }
-      } catch (e) {
-        // ignore in environments where window isn't writable
-      }
 
       await conversation.sendContextualUpdate(
         `Session start. product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}; user_offer=${userOffer}`,
       )
 
-      // NEW: instruct the agent to call the tool when it detects a buyer price.
-      await conversation.sendContextualUpdate(
-        `INSTRUCTIONS TO AGENT: When the caller explicitly states a numeric offer (e.g., "I can do $200", "I offer 180"), call the client tool "set_user_offer" with { "offer": <number> } (or call "parse_user_offer" with the raw transcript). Do not announce that you are reporting the number to the UI. Update the UI silently and continue negotiation. Only call when you are confident the number is an offer.`,
-      )
     } catch (err) {
       console.error("[v0] Error starting conversation:", err)
       const errorMessage = err instanceof Error ? err.message : "Unknown error occurred"
@@ -500,7 +721,9 @@ export default function Page(): React.JSX.Element {
 
   const endNow = useCallback(async (): Promise<void> => {
     await conversation.endSession()
-  }, [conversation])
+    // Guarantee a toast for manual stop regardless of library events
+    notifyDisconnect("You stopped the agent.")
+  }, [conversation, notifyDisconnect])
 
   const takeOffer = useCallback(
     async (buyer: Buyer): Promise<void> => {
@@ -510,11 +733,9 @@ export default function Page(): React.JSX.Element {
       setSlidersFrozen(true)
       setEndingSoon(true)
       await conversation.sendUserMessage(
-        `I am taking ${buyer.name}'s offer at ${buyer.price} for ${productName} - ${productDescription}. Please acknowledge and close the deal.`,
+        `DEAL CLOSED: ${productName} has been sold to another buyer for $${buyer.price}. Thank you for calling and have a good day.`,
       )
-      setTimeout(() => {
-        void conversation.endSession()
-      }, 5000)
+      void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
     },
   [conversation, productName, productDescription, status],
   )
@@ -527,14 +748,12 @@ export default function Page(): React.JSX.Element {
       setSlidersFrozen(true)
       setEndingSoon(true)
       await conversation.sendUserMessage(
-        `Ending call and accepting the best current offer: ${bestBid.name} at ${bestBid.price} for ${productName} - ${productDescription}.`,
+        `DEAL CLOSED: ${productName} has been sold to another buyer for $${bestBid.price}. Thank you for calling and have a good day.`,
       )
-      setTimeout(() => {
-        void conversation.endSession()
-      }, 5000)
+      void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
     } else {
-      await conversation.sendUserMessage("Ending call. No offers to accept.")
-      await conversation.endSession()
+  await conversation.sendUserMessage("Ending call. No offers to accept.")
+  void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
     }
   }, [conversation, bestBid, productName, productDescription, status])
 
@@ -657,18 +876,20 @@ export default function Page(): React.JSX.Element {
             )}
 
             <Button
+              variant="outline"
               onClick={start}
               disabled={status === "connected" || isStarting}
-              className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+              className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
               title="Start the AI voice agent to begin selling"
             >
               <ScrambleText text={isStarting ? "STARTING AGENT..." : "START AI SALES AGENT"} />
             </Button>
 
             <Button
+              variant="outline"
               onClick={endNow}
               disabled={status !== "connected"}
-              className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+              className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
               title="Stop the AI agent and end the session"
             >
               <ScrambleText text="STOP AGENT" />
@@ -788,9 +1009,10 @@ export default function Page(): React.JSX.Element {
               )}
 
               <Button
+                variant="outline"
                 onClick={endCallAcceptBest}
                 disabled={status !== "connected"}
-                className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+                className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
                 title="End the negotiation and accept the highest current offer"
               >
                 <ScrambleText text="CLOSE DEAL - ACCEPT BEST OFFER" />
@@ -884,7 +1106,7 @@ export default function Page(): React.JSX.Element {
                     className="block text-xs font-mono text-muted-foreground mb-2"
                     title="Your ideal selling price - AI will try to get this amount"
                   >
-                    TARGET PRICE
+                    STICKER PRICE
                   </label>
                   <Input
                     type="number"
@@ -961,10 +1183,11 @@ export default function Page(): React.JSX.Element {
                   />
 
                   <Button
+                    variant="outline"
                     onClick={() => void takeOffer(buyer)}
                     disabled={disabled}
                     size="sm"
-                    className="w-full bg-black border-2 border-primary hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+                    className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
                     title={`Accept ${buyer.name}'s offer of $${buyer.price} and close the deal`}
                   >
                     <ScrambleText text={`ACCEPT $${buyer.price} OFFER`} />

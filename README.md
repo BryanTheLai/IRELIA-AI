@@ -1,13 +1,15 @@
 # Nego Agent
 
-Voice negotiation demo built with Next.js and ElevenLabs Conversational AI. The app runs a real-time voice agent that negotiates while you control three buyers' bids via sliders. Bids update the agent context in real time; sliders freeze at 2 minutes; the call ends at 3 minutes.
+Voice negotiation demo built with Next.js and ElevenLabs Conversational AI. The app runs a real-time voice agent that negotiates while you control three buyers' bids via sliders. Bids update the agent context in real time; sliders freeze at 1 minute 30 seconds; the call ends at 2 minutes.
 
 ## Features
 - Voice agent via WebRTC using `@elevenlabs/react`
 - Secure server route to mint conversation tokens
 - Three buyer sliders with live contextual updates to the agent
 - "Take Offer" (accepts a buyer) and "End Call (Accept Best)"
-- Freeze sliders at 2:00; auto end at 3:00
+- Freeze sliders at 1:30; auto end at 2:00
+- Resilient UX: disconnect/error notifications, network offline detection, and silent-drop detection via periodic heartbeats
+- Toast UX: close button is always visible; top-bid raise toast shows only while connected and auto-closes after 5 seconds
 - No persistence; state resets on refresh
 
 ## Requirements
@@ -30,7 +32,7 @@ npm run dev
 ```
 Open http://localhost:3000
 
-Grant microphone permission when prompted. Click "Start Voice Agent" to connect. Move sliders to change bids; the agent will adapt. Use "Take Offer" or "End Call (Accept Best)" to wrap up.
+Grant microphone permission when prompted (site must be HTTPS or localhost). Click "START AI SALES AGENT" to connect. Move sliders to change bids; the agent will adapt. Use "ACCEPT $X OFFER" or "CLOSE DEAL - ACCEPT BEST OFFER" to wrap up.
 
 ## Code Structure
 - `app/layout.tsx`: Root layout (no special providers required)
@@ -41,8 +43,9 @@ Grant microphone permission when prompted. Click "Start Voice Agent" to connect.
 - Client requests a short-lived conversation token from `/api/conversation-token`
 - `useConversation.startSession({ conversationToken, connectionType: 'webrtc' })`
 - Slider changes trigger `sendContextualUpdate` containing current bids
-- At 2:00, sliders freeze and we send a freeze update
-- At 3:00, session ends gracefully
+- Every second, a snapshot is sent if the market changed; otherwise a lightweight heartbeat is sent ~every 15s to detect silent drops
+- At 1:30, sliders freeze and a freeze update is sent
+- At 2:00, session ends gracefully
 
 ## Deployment (Vercel)
 - Push this repo to GitHub
@@ -64,12 +67,19 @@ If you see "Failed to start AI agent: could not establish pc connection" on mobi
 - Network restrictions can block peer connections (public WiFi with strict filters). Try a mobile cellular network or a different WiFi network.
 - If issues persist, test on desktop to confirm whether the problem is mobile-specific.
 
+If you see `RTCDataChannel.readyState is not 'open'` during a session:
+
+- This indicates the underlying peer connection dropped or is reconnecting.
+- The UI will raise a disconnect notification and normalize controls; if you remain disconnected, click "STOP AGENT" and then "START AI SALES AGENT" to reconnect.
+- Keep the page in the foreground on mobile; backgrounding may suspend timers or audio.
+
 If you still see errors, check the server logs for the `/api/conversation-token` route and ensure `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` are set in Vercel Project Settings.
 
 ## Notes
 - Only one session per tab; Start is disabled when connected
 - Product name and base price can be configured before connecting
 - Sliders and actions are disabled after accepting an offer or at freeze time
+- Top-bid raise notifications appear only while connected and auto-dismiss after 5s
 
 ### TODO
 Target a specific user: Is this for individual sellers on eBay, small business owners, or large enterprise sales teams? Tailor your pitch to a specific audience to show you've thought about the market. For example, "We are building the 'virtual sales team' for small businesses who can't afford a full-time sales staff."

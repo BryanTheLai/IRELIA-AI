@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 
 interface ScrambleTextProps {
   text: string
@@ -12,6 +12,7 @@ const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
 export function ScrambleText({ text, className = "" }: ScrambleTextProps) {
   const [displayText, setDisplayText] = useState(text)
   const [isScrambling, setIsScrambling] = useState(false)
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Keep internal displayText in sync when the parent changes the `text` prop.
   // Don't override while an active scramble animation is running.
@@ -19,14 +20,28 @@ export function ScrambleText({ text, className = "" }: ScrambleTextProps) {
     if (!isScrambling) setDisplayText(text)
   }, [text, isScrambling])
 
+  // Cleanup interval on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+      }
+    }
+  }, [])
+
   const scramble = () => {
     if (isScrambling) return
+
+    // Clear any existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+    }
 
     setIsScrambling(true)
     let iterations = 0
     const maxIterations = text.length
 
-    const interval = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       setDisplayText(
         text
           .split("")
@@ -42,7 +57,10 @@ export function ScrambleText({ text, className = "" }: ScrambleTextProps) {
       iterations += 1 / 3
 
       if (iterations >= maxIterations) {
-        clearInterval(interval)
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current)
+          intervalRef.current = null
+        }
         setDisplayText(text)
         setIsScrambling(false)
       }
