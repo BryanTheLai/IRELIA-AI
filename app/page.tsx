@@ -49,6 +49,7 @@ export default function Page(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [isStarting, setIsStarting] = useState<boolean>(false)
   const [showGuide, setShowGuide] = useState<boolean>(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const { toast } = useToast()
 
   // Throttled disconnect notification to avoid duplicate toasts when multiple
@@ -156,15 +157,19 @@ export default function Page(): React.JSX.Element {
   useEffect(() => {
     const top = bestBid?.price ?? 0
     const prev = prevTopRef.current
-    if (status === "connected" && top !== prev && prev !== 0) {
+    if (status === "connected" && !accepted && top > prev && prev !== 0) {
       toast({
         title: `Another buyer just raised their offer`,
         description: `Current top bid is $${top}. Would you match or exceed that?`,
         duration: 5000,
       })
+      void conversation.sendContextualUpdate(
+        `EVENT: top_bid_increased; top_bid=$${top}; instruction=Say exactly: "hmm i just got another top bid, could u do better than $${top}?"`
+      )
+      void conversation.sendUserMessage("[auto] top_bid_increased")
     }
     prevTopRef.current = top
-  }, [bestBid, toast, status])
+  }, [bestBid, toast, status, conversation, accepted])
 
   // Provide stable array instances for Slider `value` props so we don't pass
   // freshly-allocated arrays on every render. Passing a new array each render
@@ -178,42 +183,24 @@ export default function Page(): React.JSX.Element {
     return m
   }, [buyers])
 
-  // Helper: wait until the agent finishes speaking or a timeout elapses.
-  // This is safer than a fixed delay and avoids cutting the agent off.
-  const waitForAgentToFinishSpeaking = async (maxWaitMs = 8000): Promise<void> => {
-    const pollMs = 200
+  const waitForAgentToFinishSpeaking = async (maxWaitMs = 25000, settleMs = 3000, postMs = 800): Promise<void> => {
+    const pollMs = 120
     const start = Date.now()
-    
-    // Use a more robust polling approach with proper error handling
+    let lastSpeakingAt = 0
+    let observed = false
     while (Date.now() - start < maxWaitMs) {
-      try {
-        // Check if conversation is still valid and connected
-        if (status !== "connected") return
-        
-        // Use the conversation object's isSpeaking flag where possible.
-        if (!conversation.isSpeaking) return
-      } catch (error) {
-        // If accessing the property fails for any reason, still continue polling
-        console.debug("Error checking isSpeaking status:", error)
+      let speaking = false
+      try { speaking = Boolean(conversation.isSpeaking) } catch {}
+      const localSpeaking = Boolean(isSpeaking)
+      if (speaking || localSpeaking) {
+        observed = true
+        lastSpeakingAt = Date.now()
       }
-      
-      // Also short-circuit if local snapshot says not speaking
-      if (!isSpeaking) return
-      
-      // Use AbortController-compatible delay for better cleanup
-      try {
-        await new Promise((resolve) => {
-          const timer = setTimeout(resolve, pollMs)
-          // Store timer reference for potential cleanup
-          return timer
-        })
-      } catch (error) {
-        console.debug("Error in speaking poll delay:", error)
-        return
-      }
+      const silentFor = lastSpeakingAt === 0 ? 0 : Date.now() - lastSpeakingAt
+      if (observed && !speaking && !localSpeaking && silentFor >= settleMs) break
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
     }
-    
-    console.debug(`waitForAgentToFinishSpeaking timed out after ${maxWaitMs}ms`)
+    if (postMs > 0) await new Promise((resolve) => setTimeout(resolve, postMs))
   }
 
   // Keep connectedAt and UI in sync with the conversation status. Some
@@ -430,7 +417,7 @@ export default function Page(): React.JSX.Element {
     if (status !== "connected") return
     
     const top = bestBid?.price ?? 0
-    const snapshot = `${productName}|${productDescription}|${basePrice}|${stickerPrice}|${top}|${userOffer}`
+    const snapshot = `${productName}|${productDescription}|${basePrice}|${stickerPrice}|${top}|${userOffer}|${sessionId ?? ''}`
     
     // Skip send if nothing important changed since last snapshot
     const lastSnapshot = stateRef.current.lastSnapshot || ''
@@ -473,7 +460,7 @@ export default function Page(): React.JSX.Element {
     }
     
     stateRef.current.lastSnapshot = snapshot
-    const txt = `Market update: product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
+    const txt = `Market update: session_id=${sessionId ?? 'n/a'}; product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
     
     try {
       await conversation.sendContextualUpdate(txt)
@@ -504,7 +491,7 @@ export default function Page(): React.JSX.Element {
         }
       }
     }
-  }, [status, conversation, bestBid, productName, productDescription, basePrice, stickerPrice, userOffer])
+  }, [status, conversation, bestBid, productName, productDescription, basePrice, stickerPrice, userOffer, sessionId])
 
   useEffect(() => {
     // Send authoritative market snapshots to the agent every 1s while connected.
@@ -544,7 +531,7 @@ export default function Page(): React.JSX.Element {
         // give the agent a chance to close or continue persuading.
         const target = Math.max(basePrice, top)
         await conversation.sendContextualUpdate(
-          `FREEZE: sliders locked; product=${productName}; description=${productDescription}; user_offer=${userOffer}; top_bid=${top}; min=${basePrice}; target=${target}; instruction=If user_offer < ${basePrice}, keep persuading the user to raise their bid at least to ${target} or to beat the top bid without revealing competitor identities. If user later offers >= Math.max(${basePrice}, top_bid+1), accept.`,
+          `FREEZE: session_id=${sessionId ?? 'n/a'}; sliders locked; product=${productName}; description=${productDescription}; user_offer=${userOffer}; top_bid=${top}; min=${basePrice}; target=${target}; instruction=If user_offer < ${basePrice}, keep persuading the user to raise their bid at least to ${target} or to beat the top bid without revealing competitor identities. If user later offers >= Math.max(${basePrice}, top_bid+1), accept.`,
         )
       } catch (err) {
         console.error("Error handling freeze logic:", err)
@@ -572,16 +559,12 @@ export default function Page(): React.JSX.Element {
       setAccepted(next)
       setSlidersFrozen(true)
       setEndingSoon(true)
-      
       try {
-        await conversation.sendUserMessage(
-          `I accept — I'll take ${productName} for $${userOffer}. Please proceed to close the deal.`,
+        await conversation.sendContextualUpdate(
+          `DEAL CLOSED: caller_wins=true; product=${productName}; price=$${userOffer}; instruction=Say exactly: "Alright — that’s a deal. I’ll sell you ${productName} for $${userOffer}. Thank you."`
         )
-      } catch (err) {
-        console.error("Error sending accept message:", err)
-      }
-      
-      // Wait for agent to finish speaking before ending session
+        await conversation.sendUserMessage("[auto] user_offer_accepted")
+      } catch {}
       void waitForAgentToFinishSpeaking()
         .then(() => void conversation.endSession())
         .catch(() => void conversation.endSession())
@@ -602,18 +585,20 @@ export default function Page(): React.JSX.Element {
       setEndingSoon(false)
       setUserOffer(0)
       setSlidersFrozen(false)
-      setBuyers((prev) =>
-        prev.map((b) => {
-          const newMin = Math.max(1, Math.floor(basePrice))
-          const newMax = Math.ceil(stickerPrice * 2)
+      {
+        const newMin = Math.max(1, Math.floor(basePrice))
+        const newMax = Math.ceil(stickerPrice * 2)
+        const source = stateRef.current.buyers && stateRef.current.buyers.length > 0 ? stateRef.current.buyers : buyers
+        const newBuyers = source.map((b) => {
           const resetPrice = Math.floor(
             basePrice + (stickerPrice - basePrice) * 0.3 + Math.random() * (stickerPrice - basePrice) * 0.4,
           )
           const clamped = Math.min(newMax, Math.max(newMin, resetPrice))
           return { ...b, price: clamped, min: newMin, max: newMax }
-        }),
-      )
-      // Keep the stateRef consistent with immediate UI reset
+        })
+        setBuyers(newBuyers)
+        stateRef.current.buyers = newBuyers
+      }
       stateRef.current.userOffer = 0
       stateRef.current.accepted = null
       stateRef.current.lastSnapshot = ''
@@ -624,6 +609,9 @@ export default function Page(): React.JSX.Element {
           "Secure context required: microphone and WebRTC require HTTPS. If you're testing locally, use localhost or serve over HTTPS."
         )
       }
+
+      const sid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setSessionId(sid)
 
       // Prompt for microphone permission early so mobile browsers show the native prompt
       try {
@@ -659,6 +647,7 @@ export default function Page(): React.JSX.Element {
             base_price: basePrice,
             sticker_price: stickerPrice,
             policy_confidential_competition: true,
+            session_id: sid,
           },
           clientTools: {
             // allow the agent to report the numeric offer it heard
@@ -697,9 +686,12 @@ export default function Page(): React.JSX.Element {
 
       // Expose debug helpers for manual testing in the browser console.
 
-      await conversation.sendContextualUpdate(
-        `Session start. product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${bestBid?.price ?? 0}; user_offer=${userOffer}`,
-      )
+      {
+        const startTop = (stateRef.current.buyers || []).reduce((m, b) => (b.price > m ? b.price : m), 0)
+        await conversation.sendContextualUpdate(
+          `Session start (session_id=${sid}). RESET CONTEXT: ignore any prior session memory; only use data from this session. product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; policy=do_not_disclose_competitor_bids; top_bid=${startTop}; user_offer=${userOffer}`,
+        )
+      }
 
     } catch (err) {
       console.error("[v0] Error starting conversation:", err)
@@ -735,30 +727,49 @@ export default function Page(): React.JSX.Element {
       setAccepted(next)
       setSlidersFrozen(true)
       setEndingSoon(true)
-      await conversation.sendUserMessage(
-        `DEAL CLOSED: ${productName} has been sold to another buyer for $${buyer.price}. Thank you for calling and have a good day.`,
+      await conversation.sendContextualUpdate(
+        `DEAL CLOSED: buyer_id=${buyer.id}; top_bid=$${buyer.price}; instruction=Say exactly: "Sorry I have confirmation someone just bought it for $${buyer.price}, have a nice day and thank you for calling."`
       )
-      void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
+      await conversation.sendUserMessage("[auto] deal_closed_other_buyer")
+      void waitForAgentToFinishSpeaking()
+        .then(() => void conversation.endSession())
+        .catch(() => void conversation.endSession())
     },
   [conversation, productName, productDescription, status],
   )
 
   const endCallAcceptBest = useCallback(async (): Promise<void> => {
     if (status !== "connected") return
-    if (bestBid) {
+
+    const topPrice = bestBid?.price ?? 0
+    const userWins = userOffer >= basePrice && userOffer >= topPrice
+
+    if (userWins) {
+      const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
+      setAccepted(next)
+      setSlidersFrozen(true)
+      setEndingSoon(true)
+      await conversation.sendContextualUpdate(
+        `DEAL CLOSED: caller_wins=true; product=${productName}; price=$${userOffer}; instruction=Provide concise voice instructions to complete the purchase (payment and delivery). Do not mention other buyers.`,
+      )
+      void waitForAgentToFinishSpeaking()
+    } else if (bestBid) {
       const next: Accepted = { buyerId: bestBid.id, buyerName: bestBid.name, price: bestBid.price }
       setAccepted(next)
       setSlidersFrozen(true)
       setEndingSoon(true)
-      await conversation.sendUserMessage(
-        `DEAL CLOSED: ${productName} has been sold to another buyer for $${bestBid.price}. Thank you for calling and have a good day.`,
+      await conversation.sendContextualUpdate(
+        `DEAL CLOSED: caller_wins=false; top_bid=$${bestBid.price}; instruction=Say exactly: "Sorry I have confirmation someone just bought it for $${bestBid.price}, have a nice day and thank you for calling."`
       )
-      void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
+      await conversation.sendUserMessage("[auto] deal_closed_other_buyer")
+      void waitForAgentToFinishSpeaking()
     } else {
-  await conversation.sendUserMessage("Ending call. No offers to accept.")
-  void waitForAgentToFinishSpeaking().then(() => void conversation.endSession()).catch(() => void conversation.endSession())
+      await conversation.sendContextualUpdate(
+        `DEAL NOT CLOSED: reason=no_competing_offers_or_below_min; min=$${basePrice}; instruction=Politely wrap up.`,
+      )
+      void waitForAgentToFinishSpeaking()
     }
-  }, [conversation, bestBid, productName, productDescription, status])
+  }, [status, bestBid, userOffer, basePrice, productName, conversation])
 
 
   const onBuyerChange = (id: number, price: number): void => {
