@@ -28,18 +28,18 @@ type Accepted = {
 } | null
 
 export default function Page(): React.JSX.Element {
-  const [productName, setProductName] = useState<string>("Apple AirPods 4")
+  const [productName, setProductName] = useState<string>("NVIDIA H100")
   const [productDescription, setProductDescription] = useState<string>(
-    "Latest-generation Apple wireless earbuds with improved sound, spatial audio, and longer battery life.",
+    "NVIDIA's flagship H100 Tensor Core GPU with 80GB HBM3 memory, 3,840-bit memory interface, and 4.0 TB/s bandwidth, designed for AI and high-performance computing workloads.",
   )
-  // Assumption: use USD-like consumer pricing for earbuds
-  const [basePrice, setBasePrice] = useState<number>(149)
-  const [stickerPrice, setStickerPrice] = useState<number>(249)
+  // Pricing for NVIDIA H100 GPU (in thousands USD)
+  const [basePrice, setBasePrice] = useState<number>(25000)
+  const [stickerPrice, setStickerPrice] = useState<number>(40000)
   const [userOffer, setUserOffer] = useState<number>(0)
   const [buyers, setBuyers] = useState<Buyer[]>([
-    { id: 1, name: "Alice", price: 179, min: 149, max: 249 },
-    { id: 2, name: "Marcus", price: 189, min: 149, max: 249 },
-    { id: 3, name: "Chen", price: 199, min: 149, max: 249 },
+    { id: 1, name: "Alice", price: 28000, min: 25000, max: 40000 },
+    { id: 2, name: "Marcus", price: 32000, min: 25000, max: 40000 },
+    { id: 3, name: "Chen", price: 35000, min: 25000, max: 40000 },
   ])
   const [slidersFrozen, setSlidersFrozen] = useState<boolean>(false)
   const [accepted, setAccepted] = useState<Accepted>(null)
