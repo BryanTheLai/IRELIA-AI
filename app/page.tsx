@@ -57,6 +57,11 @@ export default function Page(): React.JSX.Element {
   const micStreamRef = useRef<MediaStream | null>(null)
   const { toast } = useToast()
 
+  // Simple mobile detection without extra hook
+  const isMobile = typeof window !== 'undefined' ? 
+    /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent.toLowerCase()) : 
+    false
+
   // Throttled disconnect notification to avoid duplicate toasts when multiple
   // sources (onDisconnect, status effect, manual stop) fire around the same time.
   const lastDisconnectToastAtRef = useRef<number>(0)
@@ -349,27 +354,19 @@ export default function Page(): React.JSX.Element {
   //   return () => clearTimeout(timer)
   // }, [connectedAt, endAtMs, status, conversation, notifyDisconnect])
 
+  // Combine all stateRef updates into single useEffect for performance
   useEffect(() => {
-    stateRef.current.productName = productName
-  }, [productName])
-  useEffect(() => {
-    stateRef.current.productDescription = productDescription
-  }, [productDescription])
-  useEffect(() => {
-    stateRef.current.basePrice = basePrice
-  }, [basePrice])
-  useEffect(() => {
-    stateRef.current.stickerPrice = stickerPrice
-  }, [stickerPrice])
-  useEffect(() => {
-    stateRef.current.buyers = buyers
-  }, [buyers])
-  useEffect(() => {
-    stateRef.current.accepted = accepted
-  }, [accepted])
-  useEffect(() => {
-    stateRef.current.userOffer = userOffer
-  }, [userOffer])
+    stateRef.current = {
+      productName,
+      productDescription,
+      basePrice,
+      stickerPrice,
+      buyers,
+      accepted,
+      userOffer,
+      lastSnapshot: stateRef.current.lastSnapshot,
+    }
+  }, [productName, productDescription, basePrice, stickerPrice, buyers, accepted, userOffer])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(min-width: 1024px)')
@@ -559,6 +556,12 @@ export default function Page(): React.JSX.Element {
     if (!shouldAccept) return
 
     const finalize = async () => {
+      // Clear localStorage when user's offer is accepted
+      if (typeof window !== "undefined") {
+        localStorage.clear()
+        sessionStorage.clear()
+      }
+      
       const next: Accepted = { buyerId: 0, buyerName: "You", price: userOffer }
       setAccepted(next)
       setSlidersFrozen(true)
@@ -577,11 +580,99 @@ export default function Page(): React.JSX.Element {
     void finalize()
   }, [userOffer, status, bestBid, basePrice, accepted, conversation, productName, slidersFrozen])
 
+  // Helper function to check microphone permissions and maximize audio volume
+  const setupMobileAudio = useCallback(async (): Promise<MediaStream> => {
+    // Check if microphone is available
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("This browser doesn't support microphone access. Please use Chrome, Edge, Safari, or Firefox.")
+    }
+
+    // Check permissions first
+    try {
+      const permissionResult = await navigator.permissions.query({ name: 'microphone' as PermissionName })
+      if (permissionResult.state === 'denied') {
+        const msg = isMobile 
+          ? "Please enable microphone permissions for this website. Look for the microphone icon in your browser's address bar or go to Settings."
+          : "Microphone access is blocked. Please enable microphone permissions in your browser settings and refresh the page."
+        throw new Error(msg)
+      }
+    } catch (permErr) {
+      console.warn("Permissions API not available:", permErr)
+    }
+
+    // Create audio constraints optimized for voice
+    const constraints: MediaStreamConstraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+        channelCount: 1,
+      }
+    }
+
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (mediaErr: any) {
+      console.error("getUserMedia failed:", mediaErr)
+      
+      // Handle specific error types with user-friendly messages
+      if (mediaErr.name === 'NotAllowedError' || mediaErr.name === 'PermissionDeniedError') {
+        const msg = isMobile
+          ? "Please enable microphone access permissions for this website. Look for the microphone icon in your browser's address bar."
+          : "Please enable microphone access permissions for this website and refresh the page."
+        throw new Error(msg)
+      } else if (mediaErr.name === 'NotFoundError') {
+        throw new Error("No microphone found. Please make sure your device has a working microphone.")
+      } else if (mediaErr.name === 'NotReadableError') {
+        throw new Error("Microphone is currently in use by another app. Please close other apps that might be using the microphone.")
+      } else if (mediaErr.name === 'OverconstrainedError') {
+        // Try with simpler constraints for older devices
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        } catch {
+          throw new Error("Your device's microphone doesn't support the required audio quality for voice calls.")
+        }
+      } else {
+        throw new Error(`Unable to access microphone: ${mediaErr.message || 'Unknown error'}.`)
+      }
+    }
+
+    // Setup Web Audio API with MAXIMUM volume boost for mobile
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume()
+      }
+
+      const source = audioContext.createMediaStreamSource(stream)
+      const gainNode = audioContext.createGain()
+      
+      // MAXIMUM gain boost - much higher for mobile devices
+      // Web Audio API supports gain values up to ~3.4e38
+      gainNode.gain.value = isMobile ? 5.0 : 3.0  // Significantly higher than before
+      
+      source.connect(gainNode)
+      
+      // Store for cleanup
+      ;(stream as any)._audioContext = audioContext
+      ;(stream as any)._gainNode = gainNode
+      
+    } catch (audioErr) {
+      console.warn("Web Audio API setup failed (non-critical):", audioErr)
+    }
+
+    return stream
+  }, [isMobile])
+
   const start = useCallback(async (): Promise<void> => {
     try {
       // Clear localStorage to prevent voice bugs and cached data issues
       if (typeof window !== "undefined") {
         localStorage.clear()
+        sessionStorage.clear() // Also clear session storage
       }
 
       setError(null)
@@ -615,25 +706,18 @@ export default function Page(): React.JSX.Element {
 
       // Require secure context for getUserMedia / WebRTC
       if (typeof window !== "undefined" && !window.isSecureContext) {
-        throw new Error(
-          "Secure context required: microphone and WebRTC require HTTPS. If you're testing locally, use localhost or serve over HTTPS."
-        )
+        throw new Error("This website requires HTTPS to access your microphone. Please make sure you're visiting a secure (https://) URL.")
       }
 
       const sid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       setSessionId(sid)
 
-      // Prompt for microphone permission early so mobile browsers show the native prompt
+      // Setup microphone with mobile-friendly error handling and audio enhancements
       try {
-        // Prompt microphone permission and capture stream for mute control
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const stream = await setupMobileAudio()
         micStreamRef.current = stream
       } catch (mediaErr) {
-        const msg = mediaErr instanceof Error ? mediaErr.message : String(mediaErr)
-        if (msg.includes("Permission") || msg.includes("NotAllowedError")) {
-          throw new Error("Microphone access denied — please allow microphone access and retry.")
-        }
-        throw new Error("Unable to access microphone: " + msg)
+        throw mediaErr // Re-throw the user-friendly error from setupMobileAudio
       }
 
       const r = await fetch("/api/conversation-token", { cache: "no-store" })
@@ -688,10 +772,13 @@ export default function Page(): React.JSX.Element {
         // Surface better, actionable guidance for common mobile/WebRTC failures
         const errMsg = startErr instanceof Error ? startErr.message : String(startErr)
         console.error("conversation.startSession failed:", startErr)
+        
         if (errMsg.includes("could not establish pc connection") || errMsg.toLowerCase().includes("pc connection")) {
-          throw new Error(
-            "Could not establish peer connection. Common causes: restrictive network (no STUN/TURN), unsupported browser on mobile, or blocked 3rd-party cookies. Try using Chrome/Edge on Android or Safari on iOS, ensure site is loaded over https, allow microphone, or try again on desktop."
-          )
+          throw new Error("Unable to connect to voice service. This can happen due to network restrictions or browser compatibility. Try using Chrome on Android, Safari on iOS, or switch to a different network.")
+        } else if (errMsg.toLowerCase().includes("webrtc") || errMsg.toLowerCase().includes("peer connection")) {
+          throw new Error("Voice connection failed. Please try using a different browser (Chrome on Android or Safari on iOS work best) or switch to a different network connection.")
+        } else if (errMsg.toLowerCase().includes("ice") || errMsg.toLowerCase().includes("stun")) {
+          throw new Error("Network connection issue. Try switching from WiFi to mobile data (or vice versa) and try again.")
         }
         throw startErr
       }
@@ -710,16 +797,22 @@ export default function Page(): React.JSX.Element {
       const errorMessage = err instanceof Error ? err.message : "Unknown error occurred"
 
       // Provide more actionable UI messages for common error classes
-      if (errorMessage.includes("Microphone access denied")) {
-        setError("Failed to start AI agent: Microphone access denied. Please enable microphone permission for this site and retry.")
-      } else if (errorMessage.includes("Secure context required")) {
-        setError("Failed to start AI agent: Secure context required. Ensure you're visiting the site over HTTPS (Vercel provides HTTPS by default).")
-      } else if (errorMessage.includes("Could not establish peer connection") || errorMessage.toLowerCase().includes("pc connection")) {
-        setError(
-          "Failed to start AI agent: could not establish pc connection. Try a different network or browser (Chrome/Edge on Android, Safari on iOS), ensure you allowed the microphone, and retry."
-        )
+      if (errorMessage.includes("enable microphone access permissions") || errorMessage.includes("Please enable microphone access")) {
+        setError(`Microphone Permission Required: ${errorMessage}`)
+      } else if (errorMessage.includes("No microphone found")) {
+        setError(`Microphone Not Found: ${errorMessage}`)
+      } else if (errorMessage.includes("Microphone is not available") || errorMessage.includes("NotReadableError")) {
+        setError(`Microphone Unavailable: ${errorMessage}`)
+      } else if (errorMessage.includes("doesn't support microphone access")) {
+        setError(`Browser Not Supported: ${errorMessage}`)
+      } else if (errorMessage.includes("This website requires HTTPS")) {
+        setError(`Security Required: ${errorMessage}`)
+      } else if (errorMessage.includes("Voice connection failed") || errorMessage.includes("Unable to connect to voice service")) {
+        setError(`Connection Failed: ${errorMessage}`)
+      } else if (errorMessage.includes("Network connection issue")) {
+        setError(`Network Issue: ${errorMessage}`)
       } else {
-        setError(`Failed to start AI agent: ${errorMessage}`)
+        setError(`Unable to Start Voice Agent: ${errorMessage}`)
       }
     } finally {
       setIsStarting(false)
@@ -741,9 +834,56 @@ export default function Page(): React.JSX.Element {
       })
     }
   }, [micMuted])
+
+  // Cleanup audio resources when component unmounts or agent stops
+  useEffect(() => {
+    return () => {
+      const stream = micStreamRef.current
+      if (stream) {
+        // Cleanup audio context and gain nodes
+        const audioContext = (stream as any)._audioContext
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {})
+        }
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => {
+          track.stop()
+        })
+        micStreamRef.current = null
+      }
+    }
+  }, [])
+
+  // Mobile-specific: Re-enable audio context when page becomes visible
+  // (helps with audio issues when app goes to background and returns)
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && micStreamRef.current) {
+        const audioContext = (micStreamRef.current as any)._audioContext
+        if (audioContext && audioContext.state === 'suspended') {
+          try {
+            await audioContext.resume()
+          } catch (err) {
+            console.warn('Failed to resume audio context:', err)
+          }
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
   const takeOffer = useCallback(
     async (buyer: Buyer): Promise<void> => {
       if (status !== "connected") return
+      
+      // Clear localStorage when accepting any offer
+      if (typeof window !== "undefined") {
+        localStorage.clear()
+        sessionStorage.clear()
+      }
+      
       const next: Accepted = { buyerId: buyer.id, buyerName: buyer.name, price: buyer.price }
       setAccepted(next)
       setSlidersFrozen(true)
@@ -761,6 +901,12 @@ export default function Page(): React.JSX.Element {
 
   const endCallAcceptBest = useCallback(async (): Promise<void> => {
     if (status !== "connected") return
+
+    // Clear localStorage when accepting best offer
+    if (typeof window !== "undefined") {
+      localStorage.clear()
+      sessionStorage.clear()
+    }
 
     const topPrice = bestBid?.price ?? 0
     const userWins = userOffer >= basePrice && userOffer >= topPrice
@@ -855,8 +1001,32 @@ export default function Page(): React.JSX.Element {
       </div>
 
       <div className="max-w-7xl mx-auto p-4 space-y-4">
+        {/* Mobile-specific guidance */}
+        {isMobile && showGuide && status !== "connected" && (
+          <Card className="terminal-border p-4 bg-blue-500/10 border-blue-500/50">
+            <div className="flex items-start justify-between">
+              <div className="space-y-2">
+                <div className="text-sm font-mono text-blue-300 flex items-center gap-2">
+                  📱 <ScrambleText text="MOBILE DEVICE DETECTED" />
+                </div>
+                <div className="text-xs text-foreground leading-relaxed">
+                  <strong>For best experience:</strong> Use Chrome or Safari browser, ensure microphone permissions are enabled, and use headphones or earbuds to prevent echo.
+                </div>
+              </div>
+              <Button
+                onClick={() => setShowGuide(false)}
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </Button>
+            </div>
+          </Card>
+        )}
+
         {/* First-time user guide */}
-        {showGuide && status !== "connected" && (
+        {showGuide && status !== "connected" && !isMobile && (
           <Card className="terminal-border p-4 bg-blue-500/10 border-blue-500/50">
             <div className="flex items-start justify-between">
               <div className="space-y-2">
@@ -925,8 +1095,9 @@ export default function Page(): React.JSX.Element {
                 <TooltipTrigger
                   onClick={() => setMicMuted(!micMuted)}
                   disabled={status !== "connected"}
-                  className={`w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors border border-input rounded-md px-3 py-2 flex items-center justify-center ${!micMuted && status === "connected" ? "mic-pulse" : ""
-                    } disabled:pointer-events-none disabled:opacity-50`}
+                  className={`w-full ${isMobile ? 'mobile-mic-button mobile-touch-target' : ''} bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors border border-input rounded-md px-3 py-2 flex items-center justify-center ${
+                    !micMuted && status === "connected" ? "mic-pulse" : ""
+                  } disabled:pointer-events-none disabled:opacity-50`}
                   title={micMuted ? "Unmute microphone" : "Mute microphone"}
                 >
                   {micMuted ? (
@@ -937,12 +1108,12 @@ export default function Page(): React.JSX.Element {
                   ) : (
                     <>
                       <Mic className="w-4 h-4 mr-2" />
-                      MIC LIVE
+                      {isMobile ? 'MIC ON' : 'MIC LIVE'}
                     </>
                   )}
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>{micMuted ? "Microphone muted - click to unmute" : "Microphone is live - click to mute"}</p>
+                  <p>{micMuted ? "Microphone muted - tap to unmute" : "Microphone is live - tap to mute"}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
