@@ -12,6 +12,8 @@ import { Card } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Mic, MicOff } from "lucide-react"
 
 type Buyer = {
   id: number
@@ -50,6 +52,9 @@ export default function Page(): React.JSX.Element {
   const [isStarting, setIsStarting] = useState<boolean>(false)
   const [showGuide, setShowGuide] = useState<boolean>(true)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [micMuted, setMicMuted] = useState<boolean>(false)
+  // Reference to local microphone MediaStream to manually mute/unmute tracks
+  const micStreamRef = useRef<MediaStream | null>(null)
   const { toast } = useToast()
 
   // Throttled disconnect notification to avoid duplicate toasts when multiple
@@ -93,16 +98,15 @@ export default function Page(): React.JSX.Element {
   const lastHeartbeatAtRef = useRef<number>(0)
 
   const conversation = useConversation({
+    micMuted,
     onConnect: () => {
       const now = Date.now()
       setConnectedAt(now)
       setSlidersFrozen(false)
       setAccepted(null)
       setEndingSoon(false)
-  // Hide first-time guide after first successful connect so it doesn't
-  // pop back open on auto stop/disconnect within the same visit
-  setShowGuide(false)
-      // Reset the last snapshot on new connection
+      setMicMuted(false)
+      setShowGuide(false)
       stateRef.current.lastSnapshot = ''
       sendErrorStreakRef.current = 0
       lastHeartbeatAtRef.current = now
@@ -111,16 +115,16 @@ export default function Page(): React.JSX.Element {
       setConnectedAt(null)
       setSlidersFrozen(false)
       setEndingSoon(false)
-      // Clear snapshot state on disconnect
+      setMicMuted(false)
       stateRef.current.lastSnapshot = ''
-      const reason = (details && typeof details === 'object') ?
-        (('message' in details && String((details as { message?: unknown }).message)) ||
-         ('reason' in details && String((details as { reason?: unknown }).reason)) ||
-         undefined)
+      const reason = (details && typeof details === 'object')
+        ? (('message' in details && String((details as { message?: unknown }).message)) ||
+          ('reason' in details && String((details as { reason?: unknown }).reason)) ||
+          undefined)
         : undefined
       notifyDisconnect(reason)
     },
-    onMessage: () => {},
+    onMessage: () => { },
     onError: (error) => {
       console.error("Conversation error:", error)
       const msg = (error && typeof error === 'object' && 'message' in error)
@@ -140,7 +144,7 @@ export default function Page(): React.JSX.Element {
     if (!connectedAt || status !== "connected") return null
     return connectedAt + 90_000
   }, [connectedAt, status])
-  
+
   const endAtMs = useMemo<number | null>(() => {
     // Only calculate end time if we have a valid, recent connection timestamp
     if (!connectedAt || status !== "connected") return null
@@ -151,7 +155,7 @@ export default function Page(): React.JSX.Element {
     const sorted = [...buyers].sort((a, b) => b.price - a.price)
     return sorted[0] ?? null
   }, [buyers])
-  
+
   // Notify user when top bid changes
   const prevTopRef = useRef<number>(bestBid?.price ?? 0)
   useEffect(() => {
@@ -190,7 +194,7 @@ export default function Page(): React.JSX.Element {
     let observed = false
     while (Date.now() - start < maxWaitMs) {
       let speaking = false
-      try { speaking = Boolean(conversation.isSpeaking) } catch {}
+      try { speaking = Boolean(conversation.isSpeaking) } catch { }
       const localSpeaking = Boolean(isSpeaking)
       if (speaking || localSpeaking) {
         observed = true
@@ -308,42 +312,42 @@ export default function Page(): React.JSX.Element {
     }
   }, [status, isSpeaking, conversation, notifyDisconnect])
 
-  // Automatic freeze at 90 seconds
-  useEffect(() => {
-    if (!connectedAt || !freezeAtMs || slidersFrozen) return
-    
-    const timeUntilFreeze = freezeAtMs - Date.now()
-    if (timeUntilFreeze <= 0) {
-      setSlidersFrozen(true)
-      return
-    }
-    
-    const timer = setTimeout(() => {
-      setSlidersFrozen(true)
-    }, timeUntilFreeze)
-    
-    return () => clearTimeout(timer)
-  }, [connectedAt, freezeAtMs, slidersFrozen])
+  // Automatic freeze at 90 seconds - DISABLED per user request
+  // useEffect(() => {
+  //   if (!connectedAt || !freezeAtMs || slidersFrozen) return
+  //
+  //   const timeUntilFreeze = freezeAtMs - Date.now()
+  //   if (timeUntilFreeze <= 0) {
+  //     setSlidersFrozen(true)
+  //     return
+  //   }
+  //
+  //   const timer = setTimeout(() => {
+  //     setSlidersFrozen(true)
+  //   }, timeUntilFreeze)
+  //
+  //   return () => clearTimeout(timer)
+  // }, [connectedAt, freezeAtMs, slidersFrozen])
 
-  // Automatic session end at 120 seconds
-  useEffect(() => {
-    if (!connectedAt || !endAtMs || status !== "connected") return
-    
-    const timeUntilEnd = endAtMs - Date.now()
-    if (timeUntilEnd <= 0) {
-    // Proactively inform the user before ending to avoid a silent stop
-    notifyDisconnect("Session ended due to timeout.")
-    void conversation.endSession()
-      return
-    }
-    
-    const timer = setTimeout(() => {
-    notifyDisconnect("Session ended due to timeout.")
-    void conversation.endSession()
-    }, timeUntilEnd)
-    
-    return () => clearTimeout(timer)
-  }, [connectedAt, endAtMs, status, conversation, notifyDisconnect])
+  // Automatic session end at 120 seconds - DISABLED per user request
+  // useEffect(() => {
+  //   if (!connectedAt || !endAtMs || status !== "connected") return
+  //
+  //   const timeUntilEnd = endAtMs - Date.now()
+  //   if (timeUntilEnd <= 0) {
+  //     // Proactively inform the user before ending to avoid a silent stop
+  //     notifyDisconnect("Session ended due to timeout.")
+  //     void conversation.endSession()
+  //     return
+  //   }
+  //
+  //   const timer = setTimeout(() => {
+  //     notifyDisconnect("Session ended due to timeout.")
+  //     void conversation.endSession()
+  //   }, timeUntilEnd)
+  //
+  //   return () => clearTimeout(timer)
+  // }, [connectedAt, endAtMs, status, conversation, notifyDisconnect])
 
   useEffect(() => {
     stateRef.current.productName = productName
@@ -415,10 +419,10 @@ export default function Page(): React.JSX.Element {
   // Market update sender - stabilized to prevent excessive effect recreation
   const sendMarketUpdate = useCallback(async () => {
     if (status !== "connected") return
-    
+
     const top = bestBid?.price ?? 0
     const snapshot = `${productName}|${productDescription}|${basePrice}|${stickerPrice}|${top}|${userOffer}|${sessionId ?? ''}`
-    
+
     // Skip send if nothing important changed since last snapshot
     const lastSnapshot = stateRef.current.lastSnapshot || ''
     if (lastSnapshot === snapshot) {
@@ -439,7 +443,7 @@ export default function Page(): React.JSX.Element {
             setEndingSoon(false)
             setAccepted(null)
             sendErrorStreakRef.current = 0
-            try { await conversation.endSession() } catch {}
+            try { await conversation.endSession() } catch { }
           } else {
             sendErrorStreakRef.current += 1
             if (sendErrorStreakRef.current >= 2) {
@@ -449,7 +453,7 @@ export default function Page(): React.JSX.Element {
               setEndingSoon(false)
               setAccepted(null)
               sendErrorStreakRef.current = 0
-              try { await conversation.endSession() } catch {}
+              try { await conversation.endSession() } catch { }
             }
           }
         } finally {
@@ -458,10 +462,10 @@ export default function Page(): React.JSX.Element {
       }
       return
     }
-    
+
     stateRef.current.lastSnapshot = snapshot
     const txt = `Market update: session_id=${sessionId ?? 'n/a'}; product=${productName}; description=${productDescription}; base=${basePrice}; sticker=${stickerPrice}; top_bid=${top}; user_offer=${userOffer}; note=Do not reveal competitor bids.`
-    
+
     try {
       await conversation.sendContextualUpdate(txt)
       sendErrorStreakRef.current = 0
@@ -477,7 +481,7 @@ export default function Page(): React.JSX.Element {
         setEndingSoon(false)
         setAccepted(null)
         sendErrorStreakRef.current = 0
-        try { await conversation.endSession() } catch {}
+        try { await conversation.endSession() } catch { }
       } else {
         sendErrorStreakRef.current += 1
         if (sendErrorStreakRef.current >= 2) {
@@ -487,7 +491,7 @@ export default function Page(): React.JSX.Element {
           setEndingSoon(false)
           setAccepted(null)
           sendErrorStreakRef.current = 0
-          try { await conversation.endSession() } catch {}
+          try { await conversation.endSession() } catch { }
         }
       }
     }
@@ -510,7 +514,7 @@ export default function Page(): React.JSX.Element {
     // send immediately, then every 1s
     void sendMarketUpdate()
     const t = setInterval(intervalSender, 1000)
-    
+
     return () => {
       stopped = true
       clearInterval(t)
@@ -548,10 +552,10 @@ export default function Page(): React.JSX.Element {
   // and post-freeze acceptance in a single, race-condition-free effect.
   useEffect(() => {
     if (status !== "connected" || accepted) return
-    
+
     const top = bestBid?.price ?? 0
     const shouldAccept = userOffer > top && userOffer >= basePrice
-    
+
     if (!shouldAccept) return
 
     const finalize = async () => {
@@ -564,17 +568,22 @@ export default function Page(): React.JSX.Element {
           `DEAL CLOSED: caller_wins=true; product=${productName}; price=$${userOffer}; instruction=Say exactly: "Alright — that’s a deal. I’ll sell you ${productName} for $${userOffer}. Thank you."`
         )
         await conversation.sendUserMessage("[auto] user_offer_accepted")
-      } catch {}
+      } catch { }
       void waitForAgentToFinishSpeaking()
         .then(() => void conversation.endSession())
         .catch(() => void conversation.endSession())
     }
-    
+
     void finalize()
   }, [userOffer, status, bestBid, basePrice, accepted, conversation, productName, slidersFrozen])
 
   const start = useCallback(async (): Promise<void> => {
     try {
+      // Clear localStorage to prevent voice bugs and cached data issues
+      if (typeof window !== "undefined") {
+        localStorage.clear()
+      }
+
       setError(null)
       setIsStarting(true)
 
@@ -585,6 +594,7 @@ export default function Page(): React.JSX.Element {
       setEndingSoon(false)
       setUserOffer(0)
       setSlidersFrozen(false)
+      setMicMuted(false)
       {
         const newMin = Math.max(1, Math.floor(basePrice))
         const newMax = Math.ceil(stickerPrice * 2)
@@ -615,10 +625,12 @@ export default function Page(): React.JSX.Element {
 
       // Prompt for microphone permission early so mobile browsers show the native prompt
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Prompt microphone permission and capture stream for mute control
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        micStreamRef.current = stream
       } catch (mediaErr) {
         const msg = mediaErr instanceof Error ? mediaErr.message : String(mediaErr)
-        if (msg.includes("Permission" ) || msg.includes("NotAllowedError")) {
+        if (msg.includes("Permission") || msg.includes("NotAllowedError")) {
           throw new Error("Microphone access denied — please allow microphone access and retry.")
         }
         throw new Error("Unable to access microphone: " + msg)
@@ -664,7 +676,7 @@ export default function Page(): React.JSX.Element {
                 // emit a DOM event so you can observe tool calls from the browser console
                 try {
                   window.dispatchEvent(new CustomEvent("elevenlabs-client-tool", { detail: { tool: "set_user_offer", parameters: { offer: n } } }))
-                } catch {}
+                } catch { }
                 return `ok:reported:${n}`
               } catch (e) {
                 return `error`
@@ -720,6 +732,15 @@ export default function Page(): React.JSX.Element {
     notifyDisconnect("You stopped the agent.")
   }, [conversation, notifyDisconnect])
 
+  // Toggle local microphone tracks on micMuted change
+  useEffect(() => {
+    const stream = micStreamRef.current
+    if (stream) {
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !micMuted
+      })
+    }
+  }, [micMuted])
   const takeOffer = useCallback(
     async (buyer: Buyer): Promise<void> => {
       if (status !== "connected") return
@@ -735,7 +756,7 @@ export default function Page(): React.JSX.Element {
         .then(() => void conversation.endSession())
         .catch(() => void conversation.endSession())
     },
-  [conversation, productName, productDescription, status],
+    [conversation, productName, productDescription, status],
   )
 
   const endCallAcceptBest = useCallback(async (): Promise<void> => {
@@ -899,6 +920,33 @@ export default function Page(): React.JSX.Element {
               <ScrambleText text={isStarting ? "STARTING AGENT..." : "START AI SALES AGENT"} />
             </Button>
 
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  onClick={() => setMicMuted(!micMuted)}
+                  disabled={status !== "connected"}
+                  className={`w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors border border-input rounded-md px-3 py-2 flex items-center justify-center ${!micMuted && status === "connected" ? "mic-pulse" : ""
+                    } disabled:pointer-events-none disabled:opacity-50`}
+                  title={micMuted ? "Unmute microphone" : "Mute microphone"}
+                >
+                  {micMuted ? (
+                    <>
+                      <MicOff className="w-4 h-4 mr-2" />
+                      MIC MUTED
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-4 h-4 mr-2" />
+                      MIC LIVE
+                    </>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{micMuted ? "Microphone muted - click to unmute" : "Microphone is live - click to mute"}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
             <Button
               variant="outline"
               onClick={endNow}
@@ -912,25 +960,25 @@ export default function Page(): React.JSX.Element {
 
           <div className={collapsed.systemStatus ? "hidden lg:block" : ""}>
             <div className="grid grid-cols-3 gap-4 text-xs font-mono">
-            <div className="space-y-2">
-              <div className="text-muted-foreground" title="How long the AI agent has been active">
-                UPTIME:
+              <div className="space-y-2">
+                <div className="text-muted-foreground" title="How long the AI agent has been active">
+                  UPTIME:
+                </div>
+                <div className="text-green-400">{fmtUptime()}</div>
               </div>
-              <div className="text-green-400">{fmtUptime()}</div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-muted-foreground" title="Time until buyer offers are locked in">
-                FINALIZE IN:
+              <div className="space-y-2">
+                <div className="text-muted-foreground" title="Time until buyer offers are locked in">
+                  FINALIZE IN:
+                </div>
+                <div className="text-warning">{fmtRemaining(freezeAtMs)}</div>
               </div>
-              <div className="text-warning">{fmtRemaining(freezeAtMs)}</div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-muted-foreground" title="Time until negotiation session automatically ends">
-                END IN:
+              <div className="space-y-2">
+                <div className="text-muted-foreground" title="Time until negotiation session automatically ends">
+                  END IN:
+                </div>
+                <div className="text-destructive">{fmtRemaining(endAtMs)}</div>
               </div>
-              <div className="text-destructive">{fmtRemaining(endAtMs)}</div>
             </div>
-          </div>
           </div>
         </Card>
 
@@ -956,81 +1004,81 @@ export default function Page(): React.JSX.Element {
 
             {!collapsed.dealStatus && (
               <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-xs font-mono text-muted-foreground" title="Current phase of the negotiation">
-                  NEGOTIATION PHASE
-                </div>
-                <div className="text-sm font-mono text-foreground">
-                  {status === "connected" ? (
-                    slidersFrozen ? (
-                      <span className="text-warning">CLOSING_DEAL</span>
-                    ) : (
-                      <span className="text-green-400">ACTIVE_NEGOTIATION</span>
-                    )
-                  ) : (
-                    <span className="text-muted-foreground">WAITING_TO_START</span>
-                  )}
-                </div>
-              </div>
-
-              {userOffer > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs font-mono text-muted-foreground" title="Your current offer">
-                    YOUR OFFER
+                  <div className="text-xs font-mono text-muted-foreground" title="Current phase of the negotiation">
+                    NEGOTIATION PHASE
                   </div>
-                  <div className="text-lg font-mono text-blue-400">${userOffer}</div>
-                  <div className="text-xs font-mono text-muted-foreground">
-                    STATUS: {userOffer >= (bestBid?.price || 0) ? "🏆 HIGHEST" : "📈 COMPETING"}
+                  <div className="text-sm font-mono text-foreground">
+                    {status === "connected" ? (
+                      slidersFrozen ? (
+                        <span className="text-warning">CLOSING_DEAL</span>
+                      ) : (
+                        <span className="text-green-400">ACTIVE_NEGOTIATION</span>
+                      )
+                    ) : (
+                      <span className="text-muted-foreground">WAITING_TO_START</span>
+                    )}
                   </div>
                 </div>
-              )}
 
-              <div className="space-y-2">
-                <div
-                  className="text-xs font-mono text-muted-foreground"
-                  title="The highest offer currently on the table"
-                >
-                  BEST CURRENT OFFER
-                </div>
-                <div className="text-lg font-mono text-primary">{bestBid ? `$${bestBid.price}` : "--"}</div>
-                {bestBid && (
-                  <div className="text-xs font-mono text-muted-foreground">
-                    FROM: <ScrambleText text={bestBid.name} />
+                {userOffer > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-mono text-muted-foreground" title="Your current offer">
+                      YOUR OFFER
+                    </div>
+                    <div className="text-lg font-mono text-blue-400">${userOffer}</div>
+                    <div className="text-xs font-mono text-muted-foreground">
+                      STATUS: {userOffer >= (bestBid?.price || 0) ? "🏆 HIGHEST" : "📈 COMPETING"}
+                    </div>
                   </div>
                 )}
-              </div>
 
-              <div className="space-y-2">
-                <div className="text-xs font-mono text-muted-foreground" title="Short product description">
-                  PRODUCT DESCRIPTION
-                </div>
-                <div className="text-sm font-mono text-foreground">{productDescription}</div>
-              </div>
-
-              {accepted && (
-                <div className="border border-green-500/50 rounded p-3 bg-green-500/10">
-                  <div className="text-xs font-mono text-green-400 mb-1">✅ DEAL CLOSED</div>
-                  <div className="text-sm font-mono text-foreground">
-                    SOLD TO: <ScrambleText text={accepted.buyerName} /> @ ${accepted.price}
+                <div className="space-y-2">
+                  <div
+                    className="text-xs font-mono text-muted-foreground"
+                    title="The highest offer currently on the table"
+                  >
+                    BEST CURRENT OFFER
                   </div>
+                  <div className="text-lg font-mono text-primary">{bestBid ? `$${bestBid.price}` : "--"}</div>
+                  {bestBid && (
+                    <div className="text-xs font-mono text-muted-foreground">
+                      FROM: <ScrambleText text={bestBid.name} />
+                    </div>
+                  )}
                 </div>
-              )}
 
-              {endingSoon && (
-                <div className="border border-warning/50 rounded p-3 bg-warning/10">
-                  <div className="text-xs font-mono text-warning">⏰ FINALIZING DEAL...</div>
+                <div className="space-y-2">
+                  <div className="text-xs font-mono text-muted-foreground" title="Short product description">
+                    PRODUCT DESCRIPTION
+                  </div>
+                  <div className="text-sm font-mono text-foreground">{productDescription}</div>
                 </div>
-              )}
 
-              <Button
-                variant="outline"
-                onClick={endCallAcceptBest}
-                disabled={status !== "connected"}
-                className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
-                title="End the negotiation and accept the highest current offer"
-              >
-                <ScrambleText text="CLOSE DEAL - ACCEPT BEST OFFER" />
-              </Button>
+                {accepted && (
+                  <div className="border border-green-500/50 rounded p-3 bg-green-500/10">
+                    <div className="text-xs font-mono text-green-400 mb-1">✅ DEAL CLOSED</div>
+                    <div className="text-sm font-mono text-foreground">
+                      SOLD TO: <ScrambleText text={accepted.buyerName} /> @ ${accepted.price}
+                    </div>
+                  </div>
+                )}
+
+                {endingSoon && (
+                  <div className="border border-warning/50 rounded p-3 bg-warning/10">
+                    <div className="text-xs font-mono text-warning">⏰ FINALIZING DEAL...</div>
+                  </div>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={endCallAcceptBest}
+                  disabled={status !== "connected"}
+                  className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+                  title="End the negotiation and accept the highest current offer"
+                >
+                  <ScrambleText text="CLOSE DEAL - ACCEPT BEST OFFER" />
+                </Button>
               </div>
 
             )}
@@ -1065,89 +1113,89 @@ export default function Page(): React.JSX.Element {
 
             {!collapsed.productConfig && (
               <div className="space-y-4">
-              <div>
-                <label
-                  className="block text-xs font-mono text-muted-foreground mb-2"
-                  title="What product or service are you selling?"
-                >
-                  PRODUCT/SERVICE
-                </label>
-                <Input
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                  disabled={status === "connected"}
-                  className="bg-secondary border-border font-mono text-sm"
-                  placeholder="e.g., iPhone 15, Consulting Service"
-                />
-              </div>
-
-              <div>
-                <label
-                  className="block text-xs font-mono text-muted-foreground mb-2"
-                  title="A short description to help the AI agent sell your product"
-                >
-                  PRODUCT DESCRIPTION
-                </label>
-                <Textarea
-                  value={productDescription}
-                  onChange={(e) => setProductDescription(e.target.value)}
-                  disabled={status === "connected"}
-                  className="bg-secondary border-border font-mono text-sm"
-                  placeholder="Short description to assist the AI during negotiation"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label
                     className="block text-xs font-mono text-muted-foreground mb-2"
-                    title="Minimum price you'll accept - AI won't go below this"
+                    title="What product or service are you selling?"
                   >
-                    MINIMUM PRICE
+                    PRODUCT/SERVICE
                   </label>
                   <Input
-                    type="number"
-                    value={basePrice}
-                    onChange={(e) => setBasePrice(Number(e.target.value))}
+                    value={productName}
+                    onChange={(e) => setProductName(e.target.value)}
                     disabled={status === "connected"}
                     className="bg-secondary border-border font-mono text-sm"
-                    placeholder="150"
+                    placeholder="e.g., iPhone 15, Consulting Service"
                   />
                 </div>
 
                 <div>
                   <label
                     className="block text-xs font-mono text-muted-foreground mb-2"
-                    title="Your ideal selling price - AI will try to get this amount"
+                    title="A short description to help the AI agent sell your product"
                   >
-                    STICKER PRICE
+                    PRODUCT DESCRIPTION
+                  </label>
+                  <Textarea
+                    value={productDescription}
+                    onChange={(e) => setProductDescription(e.target.value)}
+                    disabled={status === "connected"}
+                    className="bg-secondary border-border font-mono text-sm"
+                    placeholder="Short description to assist the AI during negotiation"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label
+                      className="block text-xs font-mono text-muted-foreground mb-2"
+                      title="Minimum price you'll accept - AI won't go below this"
+                    >
+                      MINIMUM PRICE
+                    </label>
+                    <Input
+                      type="number"
+                      value={basePrice}
+                      onChange={(e) => setBasePrice(Number(e.target.value))}
+                      disabled={status === "connected"}
+                      className="bg-secondary border-border font-mono text-sm"
+                      placeholder="150"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      className="block text-xs font-mono text-muted-foreground mb-2"
+                      title="Your ideal selling price - AI will try to get this amount"
+                    >
+                      STICKER PRICE
+                    </label>
+                    <Input
+                      type="number"
+                      value={stickerPrice}
+                      onChange={(e) => setStickerPrice(Number(e.target.value))}
+                      disabled={status === "connected"}
+                      className="bg-secondary border-border font-mono text-sm"
+                      placeholder="220"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    className="block text-xs font-mono text-muted-foreground mb-2"
+                    title="Your current offer to compete with other buyers"
+                  >
+                    YOUR OFFER
                   </label>
                   <Input
                     type="number"
-                    value={stickerPrice}
-                    onChange={(e) => setStickerPrice(Number(e.target.value))}
-                    disabled={status === "connected"}
+                    value={userOffer}
+                    onChange={(e) => setUserOffer(Number(e.target.value))}
                     className="bg-secondary border-border font-mono text-sm"
-                    placeholder="220"
+                    placeholder="Enter your offer..."
                   />
                 </div>
-              </div>
-
-              <div>
-                <label
-                  className="block text-xs font-mono text-muted-foreground mb-2"
-                  title="Your current offer to compete with other buyers"
-                >
-                  YOUR OFFER
-                </label>
-                <Input
-                  type="number"
-                  value={userOffer}
-                  onChange={(e) => setUserOffer(Number(e.target.value))}
-                  className="bg-secondary border-border font-mono text-sm"
-                  placeholder="Enter your offer..."
-                />
-              </div>
               </div>
             )}
           </Card>
@@ -1174,40 +1222,40 @@ export default function Page(): React.JSX.Element {
             {!collapsed.buyers && (
               <div className="space-y-4">
                 {buyers.map((buyer) => (
-                <div key={buyer.id} className="border border-border/50 rounded p-3 bg-secondary/30">
-                  <div className="flex items-center justify-between mb-2">
-                    <div
-                      className="text-xs font-mono text-foreground"
-                      title={`Buyer ${buyer.id} - competing for your product`}
-                    >
-                      <ScrambleText text={buyer.name} />
+                  <div key={buyer.id} className="border border-border/50 rounded p-3 bg-secondary/30">
+                    <div className="flex items-center justify-between mb-2">
+                      <div
+                        className="text-xs font-mono text-foreground"
+                        title={`Buyer ${buyer.id} - competing for your product`}
+                      >
+                        <ScrambleText text={buyer.name} />
+                      </div>
+                      <div className="text-xs font-mono text-primary">OFFER: ${buyer.price}</div>
                     </div>
-                    <div className="text-xs font-mono text-primary">OFFER: ${buyer.price}</div>
+
+                    <Slider
+                      value={buyerValueMap[buyer.id]}
+                      onValueChange={([value]) => onBuyerChange(buyer.id, value)}
+                      min={Math.max(1, Math.floor(basePrice))}
+                      max={Math.ceil(stickerPrice * 2)}
+                      step={1}
+                      disabled={disabled}
+                      className="mb-2"
+                      title="Drag to simulate this buyer changing their offer"
+                    />
+
+                    <Button
+                      variant="outline"
+                      onClick={() => void takeOffer(buyer)}
+                      disabled={disabled}
+                      size="sm"
+                      className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
+                      title={`Accept ${buyer.name}'s offer of $${buyer.price} and close the deal`}
+                    >
+                      <ScrambleText text={`ACCEPT $${buyer.price} OFFER`} />
+                    </Button>
                   </div>
-
-                  <Slider
-                    value={buyerValueMap[buyer.id]}
-                    onValueChange={([value]) => onBuyerChange(buyer.id, value)}
-                    min={Math.max(1, Math.floor(basePrice))}
-                    max={Math.ceil(stickerPrice * 2)}
-                    step={1}
-                    disabled={disabled}
-                    className="mb-2"
-                    title="Drag to simulate this buyer changing their offer"
-                  />
-
-                  <Button
-                    variant="outline"
-                    onClick={() => void takeOffer(buyer)}
-                    disabled={disabled}
-                    size="sm"
-                    className="w-full bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors"
-                    title={`Accept ${buyer.name}'s offer of $${buyer.price} and close the deal`}
-                  >
-                    <ScrambleText text={`ACCEPT $${buyer.price} OFFER`} />
-                  </Button>
-                </div>
-              ))}
+                ))}
               </div>
             )}
           </Card>
