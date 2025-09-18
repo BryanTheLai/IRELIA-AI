@@ -317,6 +317,30 @@ export default function Page(): React.JSX.Element {
     }
   }, [status, isSpeaking, conversation, notifyDisconnect])
 
+  // ElevenLabs-side disconnect watchdog: some SDKs can flip their internal
+  // status without firing a full onDisconnect callback. Poll the SDK status
+  // occasionally and reconcile UI state if the SDK reports not connected.
+  useEffect(() => {
+    const t = setInterval(() => {
+      try {
+        // conversation.status is the SDK's source of truth; if it's not
+        // connected but our UI still thinks it's connected, normalize.
+        if (status !== 'connected' && connectedAt !== null) {
+          console.warn('[elevenlabs-watchdog] SDK reports', status, 'but UI still marked connected. Normalizing UI state.')
+          notifyDisconnect('Connection lost.')
+          setConnectedAt(null)
+          setSlidersFrozen(false)
+          setEndingSoon(false)
+          setAccepted(null)
+        }
+      } catch (e) {
+        // ignore errors from reading status
+      }
+    }, 1500)
+
+    return () => clearInterval(t)
+  }, [status, connectedAt, notifyDisconnect])
+
   // Automatic freeze at 90 seconds - DISABLED per user request
   // useEffect(() => {
   //   if (!connectedAt || !freezeAtMs || slidersFrozen) return
