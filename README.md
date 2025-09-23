@@ -1,10 +1,10 @@
-# IRELIA - Voice Negotiation Agent (Nego Agent)
+# 🎙 IRELIA - Voice Negotiation Agent (Nego Agent)
 
 This repository is a voice-enabled negotiation demo built with Next.js and ElevenLabs Conversational AI. The app runs a real-time voice agent (via WebRTC) that negotiates while you control three simulated buyers' bids using sliders. Bids are sent to the agent as contextual updates in real time.
 
 This README has been refreshed to reflect the current codebase layout, required environment variables, and developer notes.
 
-## Key features
+## ⭐ Key features
 
 - Real-time voice agent using WebRTC integration (`@elevenlabs/react` on the client)
 - Secure server-side endpoint to mint short-lived conversation tokens for the agent
@@ -14,12 +14,12 @@ This README has been refreshed to reflect the current codebase layout, required 
 - Heartbeats and lightweight market snapshots to detect silent disconnects and minimize traffic
 - No persistence: all negotiation state is ephemeral and resets on page refresh
 
-## Requirements
+## 📋 Requirements
 
 - Node.js 18+ (recommended)
 - An ElevenLabs account with a configured Conversational AI agent (agent ID)
 
-## Environment variables
+## 🔧 Environment variables
 
 Create a `.env` file (copy from `.env.example` if present) and add the following server-only values:
 
@@ -29,7 +29,7 @@ Create a `.env` file (copy from `.env.example` if present) and add the following
 
 Important: The project is designed so `ELEVENLABS_API_KEY` is only used on the server (see `app/api/conversation-token/route.ts`) and is never shipped to the client.
 
-## Quick install & run (local)
+## 🚀 Quick install & run (local)
 
 1. Install dependencies:
 
@@ -45,7 +45,7 @@ npm run dev
 
 Open `http://localhost:3000` in your browser. Grant microphone permission when prompted (works on `localhost` or HTTPS). Click the "START AI SALES AGENT" button to connect.
 
-## Project layout (important files)
+## 🗂 Project layout (important files)
 
 - `app/page.tsx` — Main UI, negotiation timers, slider state, and lifecycle integration with the `useConversation` hook.
 - `app/providers.tsx` and `app/layout.tsx` — App-level providers and layout.
@@ -55,8 +55,21 @@ Open `http://localhost:3000` in your browser. Grant microphone permission when p
 - `hooks/use-toast.ts`, `hooks/use-mobile.ts` — Small hooks used by the UI.
 - `lib/utils.ts` — Utility helpers.
 - `public/` — Static assets and placeholder images.
+ 
+## 🏛 Architecture
 
-## How it works (high level)
+ ```dot
+ digraph Architecture {
+   rankdir=LR;
+   Browser -> Page;
+   Page -> Buyers;
+   Page -> useConversationHook;
+   useConversationHook -> API;
+   API -> ElevenLabsService;
+ }
+ ```
+
+## ⚙️ How it works (high level)
 
 1. The client requests a short-lived conversation token from the server at `/api/conversation-token`.
 2. The client calls `useConversation.startSession({ conversationToken, connectionType: 'webrtc' })` to establish a WebRTC session with the ElevenLabs conversational agent.
@@ -64,13 +77,13 @@ Open `http://localhost:3000` in your browser. Grant microphone permission when p
 4. While connected the client sends market snapshots every second if the market changed; otherwise it periodically sends a lightweight heartbeat (roughly every 15s) to detect silent disconnects.
 5. The UI enforces a freeze time (1:30) where slider input is disabled and automatically ends the session at 2:00.
 
-## Development notes & UX details
+## 📝 Development notes & UX details
 
 - Only one live session per tab.
 - When a user accepts an offer (either a buyer or "accept best"), the UI disables further actions and ends the session.
 - Toast notifications are used for disconnects, top-bid changes, and errors. Top-bid raise toasts auto-close after 5s and only appear while connected.
 
-## Troubleshooting
+## 🐞 Troubleshooting
 
 - If WebRTC (microphone/peer connection) fails on mobile, ensure the site is served over HTTPS and microphone permissions are granted.
 - If you see errors like `could not establish pc connection` or `RTCDataChannel.readyState is not 'open'`:
@@ -78,7 +91,7 @@ Open `http://localhost:3000` in your browser. Grant microphone permission when p
   - Test on desktop to isolate mobile/permission/network issues.
   - Check server logs for failures in `app/api/conversation-token/route.ts` (invalid API key or network issues to ElevenLabs)
 
-## Deployment
+## 🚚 Deployment
 
 This project is Vercel-friendly. Typical steps:
 
@@ -86,17 +99,17 @@ This project is Vercel-friendly. Typical steps:
 2. Import the repo on Vercel and set the environment variables (`ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, optionally `OPENAI_API_KEY`).
 3. Build command: `next build` (default). Output: Next.js standard serverless output.
 
-## Tests & checks
+## 🧪 Tests & checks
 
 There are no formal tests included. Before deploying, run the dev server and manually validate the voice session and sliders. Consider adding unit or integration tests for critical helpers in `lib/utils.ts` and the `useConversation` integration.
 
-## TODO / Next improvements
+## 📌 TODO / Next improvements
 
 - Add a small real-time visualization (price-over-time chart) to make negotiation progress easier to scan at a glance.
 - Add automated tests for the core market snapshot logic and any utility formatting functions.
 - Add guidance/UX for mobile permission flows and a fallback when microphone access is denied.
 
-## License & contribution
+## 📄 License & contribution
 
 This repo contains example/demo code. Feel free to open issues or PRs with improvements.
 
