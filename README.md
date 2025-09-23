@@ -55,18 +55,16 @@ Open `http://localhost:3000` in your browser. Grant microphone permission when p
 - `hooks/use-toast.ts`, `hooks/use-mobile.ts` — Small hooks used by the UI.
 - `lib/utils.ts` — Utility helpers.
 - `public/` — Static assets and placeholder images.
- 
+
 ## 🏛 Architecture
 
- ```dot
- digraph Architecture {
-   rankdir=LR;
-   Browser -> Page;
-   Page -> Buyers;
-   Page -> useConversationHook;
-   useConversationHook -> API;
-   API -> ElevenLabsService;
- }
+ ```mermaid
+ flowchart LR
+   Browser --> Page
+   Page --> Buyers
+   Page --> useConversationHook
+   useConversationHook --> API
+   API --> ElevenLabsService
  ```
 
 ## ⚙️ How it works (high level)
