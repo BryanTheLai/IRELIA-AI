@@ -1,85 +1,164 @@
-# Nego Agent
+# IRELIA - Voice Negotiation Agent (Nego Agent)
 
-Voice negotiation demo built with Next.js and ElevenLabs Conversational AI. The app runs a real-time voice agent that negotiates while you control three buyers' bids via sliders. Bids update the agent context in real time; sliders freeze at 1 minute 30 seconds; the call ends at 2 minutes.
+This repository is a voice-enabled negotiation demo built with Next.js and ElevenLabs Conversational AI. The app runs a real-time voice agent (via WebRTC) that negotiates while you control three simulated buyers' bids using sliders. Bids are sent to the agent as contextual updates in real time.
 
-## Features
-- Voice agent via WebRTC using `@elevenlabs/react`
-- Secure server route to mint conversation tokens
-- Three buyer sliders with live contextual updates to the agent
-- "Take Offer" (accepts a buyer) and "End Call (Accept Best)"
-- Freeze sliders at 1:30; auto end at 2:00
-- Resilient UX: disconnect/error notifications, network offline detection, and silent-drop detection via periodic heartbeats
-- Toast UX: close button is always visible; top-bid raise toast shows only while connected and auto-closes after 5 seconds
-- No persistence; state resets on refresh
+This README has been refreshed to reflect the current codebase layout, required environment variables, and developer notes.
+
+## Key features
+
+- Real-time voice agent using WebRTC integration (`@elevenlabs/react` on the client)
+- Secure server-side endpoint to mint short-lived conversation tokens for the agent
+- Three buyer sliders (live updates sent to the agent)
+- UI controls to accept a specific buyer offer or end the call and accept the best offer
+- Sliders freeze at 1:30 and the session auto-ends at 2:00
+- Heartbeats and lightweight market snapshots to detect silent disconnects and minimize traffic
+- No persistence: all negotiation state is ephemeral and resets on page refresh
 
 ## Requirements
-- Node.js 18+
-- ElevenLabs account with a configured Conversational AI agent
 
-## Environment Variables
-Create `.env` from `.env.example` and fill these values:
+- Node.js 18+ (recommended)
+- An ElevenLabs account with a configured Conversational AI agent (agent ID)
 
-- ELEVENLABS_API_KEY= your ElevenLabs API key (server-side only)
-- ELEVENLABS_AGENT_ID= your Conversational AI Agent ID
+## Environment variables
 
-Do not expose ELEVENLABS_API_KEY to the client. This app never ships that key to the browser.
+Create a `.env` file (copy from `.env.example` if present) and add the following server-only values:
 
-## Install & Run (local)
+- `ELEVENLABS_API_KEY` — Your ElevenLabs API key (server-side only; never exposed to the browser)
+- `ELEVENLABS_AGENT_ID` — The Conversational AI agent ID to use for sessions
+- `OPENAI_API_KEY` — Optional (used in some deployments/workflows if present)
+
+Important: The project is designed so `ELEVENLABS_API_KEY` is only used on the server (see `app/api/conversation-token/route.ts`) and is never shipped to the client.
+
+## Quick install & run (local)
+
+1. Install dependencies:
+
 ```bash
 npm install
+```
+
+2. Start the dev server:
+
+```bash
 npm run dev
 ```
-Open http://localhost:3000
 
-Grant microphone permission when prompted (site must be HTTPS or localhost). Click "START AI SALES AGENT" to connect. Move sliders to change bids; the agent will adapt. Use "ACCEPT $X OFFER" or "CLOSE DEAL - ACCEPT BEST OFFER" to wrap up.
+Open `http://localhost:3000` in your browser. Grant microphone permission when prompted (works on `localhost` or HTTPS). Click the "START AI SALES AGENT" button to connect.
 
-## Code Structure
-- `app/layout.tsx`: Root layout (no special providers required)
-- `app/page.tsx`: Main UI, timers, sliders, conversation lifecycle with `useConversation`
-- `app/api/conversation-token/route.ts`: Server route to get a conversation token from ElevenLabs
+## Project layout (important files)
 
-## How it works
-- Client requests a short-lived conversation token from `/api/conversation-token`
-- `useConversation.startSession({ conversationToken, connectionType: 'webrtc' })`
-- Slider changes trigger `sendContextualUpdate` containing current bids
-- Every second, a snapshot is sent if the market changed; otherwise a lightweight heartbeat is sent ~every 15s to detect silent drops
-- At 2:00, session ends gracefully
+- `app/page.tsx` — Main UI, negotiation timers, slider state, and lifecycle integration with the `useConversation` hook.
+- `app/providers.tsx` and `app/layout.tsx` — App-level providers and layout.
+- `app/api/conversation-token/route.ts` — Server API route that exchanges the server-side `ELEVENLABS_API_KEY` for a short-lived conversation token returned to the client.
+- `components/` — UI helpers, the scramble text animation, status indicator, and theme provider.
+- `components/ui/` — Reusable UI primitives (buttons, toasts, slider, dialog, etc.).
+- `hooks/use-toast.ts`, `hooks/use-mobile.ts` — Small hooks used by the UI.
+- `lib/utils.ts` — Utility helpers.
+- `public/` — Static assets and placeholder images.
 
-## Deployment (Vercel)
-- Push this repo to GitHub
-- Import the project on Vercel
-- Set Environment Variables (Project Settings → Environment Variables):
-  - ELEVENLABS_API_KEY
-  - ELEVENLABS_AGENT_ID
-  - OPENAI_API_KEY (optional)
-- Build Command: `next build` (default)
-- Output: Next.js default (Serverless)
+## How it works (high level)
 
-## Troubleshooting: Mobile & WebRTC issues
+1. The client requests a short-lived conversation token from the server at `/api/conversation-token`.
+2. The client calls `useConversation.startSession({ conversationToken, connectionType: 'webrtc' })` to establish a WebRTC session with the ElevenLabs conversational agent.
+3. Slider changes and user actions call `sendContextualUpdate` to give the agent market snapshots or user-offer updates.
+4. While connected the client sends market snapshots every second if the market changed; otherwise it periodically sends a lightweight heartbeat (roughly every 15s) to detect silent disconnects.
+5. The UI enforces a freeze time (1:30) where slider input is disabled and automatically ends the session at 2:00.
 
-If you see "Failed to start AI agent: could not establish pc connection" on mobile, try the following:
+## Architecture (Graphviz)
 
-- Ensure the site is loaded over HTTPS (Vercel provides HTTPS by default). Mobile browsers block getUserMedia on insecure origins.
-- Use a modern browser: Chrome or Edge on Android, Safari on iOS. Some browsers have limited WebRTC support.
-- Allow microphone permission when prompted. If denied, refresh and accept the permission.
-- Network restrictions can block peer connections (public WiFi with strict filters). Try a mobile cellular network or a different WiFi network.
-- If issues persist, test on desktop to confirm whether the problem is mobile-specific.
+Copy the DOT graph below into any Graphviz-compatible viewer (or save as `architecture.dot` and render with `dot -Tsvg architecture.dot -o architecture.svg`).
 
-If you see `RTCDataChannel.readyState is not 'open'` during a session:
+```dot
+digraph IRELIA_AI {
+  rankdir=LR;
+  fontsize=11;
+  node [shape=rect, style=rounded, fontsize=11];
 
-- This indicates the underlying peer connection dropped or is reconnecting.
-- The UI will raise a disconnect notification and normalize controls; if you remain disconnected, click "STOP AGENT" and then "START AI SALES AGENT" to reconnect.
-- Keep the page in the foreground on mobile; backgrounding may suspend timers or audio.
+  subgraph cluster_client {
+    label = "Client (Next.js)";
+    style = dashed;
 
-If you still see errors, check the server logs for the `/api/conversation-token` route and ensure `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` are set in Vercel Project Settings.
+    App      [label="app/page.tsx\nUI + timers + lifecycle"];
+    UseConv  [label="useConversation\n(@elevenlabs/react)"];
+    Sliders  [label="Buyer sliders (x3)\n{id, name, price, min, max}"];
+    Toasts   [label="Toasts & Status\ncomponents/ui/*"];
+    Heartbeat[label="Market snapshots (1s)\n+ heartbeat (~15s)"];
 
-## Notes
-- Only one session per tab; Start is disabled when connected
-- Product name and base price can be configured before connecting
-- Sliders and actions are disabled after accepting an offer or at freeze time
-- Top-bid raise notifications appear only while connected and auto-dismiss after 5s
+    App -> UseConv  [label="startSession(conversationToken, webrtc)"];
+    Sliders -> App  [label="price updates"];
+    App -> UseConv  [label="sendContextualUpdate()", style=dashed];
+    Heartbeat -> UseConv [label="periodic updates", style=dashed];
+    UseConv -> App  [label="events: connected, speaking, errors", dir=both];
+    App -> Toasts   [label="notify"];
+  }
 
-### TODO
-Target a specific user: Is this for individual sellers on eBay, small business owners, or large enterprise sales teams? Tailor your pitch to a specific audience to show you've thought about the market. For example, "We are building the 'virtual sales team' for small businesses who can't afford a full-time sales staff."
+  subgraph cluster_server {
+    label = "Server (Next.js API Route)";
+    style = dashed;
 
-Visualize the Data: Instead of just showing the numbers, add a simple real-time graph. Show the negotiation price line rising towards your target price, with other buyer offers as separate data points. This is a very compelling visual that tells the story instantly.
+    TokenAPI [label="/api/conversation-token\napp/api/conversation-token/route.ts"];
+    Env      [label=".env\nELEVENLABS_API_KEY\nELEVENLABS_AGENT_ID\n(OPENAI_API_KEY optional)", shape=folder];
+  }
+
+  EL [label="ElevenLabs Conversational AI\nAgent (cloud)", shape=component];
+
+  // Token minting flow
+  App -> TokenAPI   [label="GET conversation token"];
+  TokenAPI -> EL    [label="exchange API key for token"];
+  Env -> TokenAPI   [label="reads secrets", style=dotted];
+
+  // Media/Data plane
+  UseConv -> EL     [label="WebRTC: audio + data", dir=both];
+
+  // Simulated buyers and top-bid feedback
+  Buyers [label="Simulated Buyers x3\ncontrolled by sliders"];
+  Sliders -> Buyers [label="update price"];
+  Buyers -> App     [label="top bid changes → toast"];
+
+  // Session lifecycle guards
+  Freeze [label="Freeze sliders @ 1:30", shape=note];
+  End    [label="End session @ 2:00", shape=note];
+  App -> Freeze [style=dotted];
+  App -> End    [style=dotted];
+}
+```
+
+## Development notes & UX details
+
+- Only one live session per tab.
+- When a user accepts an offer (either a buyer or "accept best"), the UI disables further actions and ends the session.
+- Toast notifications are used for disconnects, top-bid changes, and errors. Top-bid raise toasts auto-close after 5s and only appear while connected.
+
+## Troubleshooting
+
+- If WebRTC (microphone/peer connection) fails on mobile, ensure the site is served over HTTPS and microphone permissions are granted.
+- If you see errors like `could not establish pc connection` or `RTCDataChannel.readyState is not 'open'`:
+  - Try reconnecting (STOP AGENT → START AI SALES AGENT).
+  - Test on desktop to isolate mobile/permission/network issues.
+  - Check server logs for failures in `app/api/conversation-token/route.ts` (invalid API key or network issues to ElevenLabs)
+
+## Deployment
+
+This project is Vercel-friendly. Typical steps:
+
+1. Push the repo to GitHub.
+2. Import the repo on Vercel and set the environment variables (`ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, optionally `OPENAI_API_KEY`).
+3. Build command: `next build` (default). Output: Next.js standard serverless output.
+
+## Tests & checks
+
+There are no formal tests included. Before deploying, run the dev server and manually validate the voice session and sliders. Consider adding unit or integration tests for critical helpers in `lib/utils.ts` and the `useConversation` integration.
+
+## TODO / Next improvements
+
+- Add a small real-time visualization (price-over-time chart) to make negotiation progress easier to scan at a glance.
+- Add automated tests for the core market snapshot logic and any utility formatting functions.
+- Add guidance/UX for mobile permission flows and a fallback when microphone access is denied.
+
+## License & contribution
+
+This repo contains example/demo code. Feel free to open issues or PRs with improvements.
+
+---
+
+If you'd like, I can also add a small `README.dev.md` with local debugging tips or add a basic smoke test that starts the Next.js dev server and checks `/` for a 200 response.
