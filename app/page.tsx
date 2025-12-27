@@ -57,6 +57,10 @@ export default function Page(): React.JSX.Element {
   const micStreamRef = useRef<MediaStream | null>(null)
   const { toast } = useToast()
 
+  // Ensure client-only branches render after hydration to avoid SSR mismatch
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => { setHydrated(true) }, [])
+
   // Simple mobile detection without extra hook
   const isMobile = typeof window !== 'undefined' ? 
     /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(navigator.userAgent.toLowerCase()) : 
@@ -572,7 +576,7 @@ export default function Page(): React.JSX.Element {
   // top_bid and meets the minimum price. This handles both immediate acceptance
   // and post-freeze acceptance in a single, race-condition-free effect.
   useEffect(() => {
-    if (status !== "connected" || accepted) return
+    if (accepted) return
 
     const top = bestBid?.price ?? 0
     const shouldAccept = userOffer > top && userOffer >= basePrice
@@ -590,15 +594,19 @@ export default function Page(): React.JSX.Element {
       setAccepted(next)
       setSlidersFrozen(true)
       setEndingSoon(true)
-      try {
-        await conversation.sendContextualUpdate(
-          `DEAL CLOSED: caller_wins=true; product=${productName}; price=$${userOffer}; instruction=Say exactly: "Alright — that’s a deal. I’ll sell you ${productName} for $${userOffer}. Thank you."`
-        )
-        await conversation.sendUserMessage("[auto] user_offer_accepted")
-      } catch { }
-      void waitForAgentToFinishSpeaking()
-        .then(() => void conversation.endSession())
-        .catch(() => void conversation.endSession())
+      // If connected, inform the agent and end the session gracefully;
+      // otherwise, just reflect the accepted deal in the UI.
+      if (status === "connected") {
+        try {
+          await conversation.sendContextualUpdate(
+            `DEAL CLOSED: caller_wins=true; product=${productName}; price=$${userOffer}; instruction=Say exactly: "Alright — that’s a deal. I’ll sell you ${productName} for $${userOffer}. Thank you."`
+          )
+          await conversation.sendUserMessage("[auto] user_offer_accepted")
+        } catch { }
+        void waitForAgentToFinishSpeaking()
+          .then(() => void conversation.endSession())
+          .catch(() => void conversation.endSession())
+      }
     }
 
     void finalize()
@@ -1026,7 +1034,7 @@ export default function Page(): React.JSX.Element {
 
       <div className="max-w-7xl mx-auto p-4 space-y-4">
         {/* Mobile-specific guidance */}
-        {isMobile && showGuide && status !== "connected" && (
+        {hydrated && isMobile && showGuide && status !== "connected" && (
           <Card className="terminal-border p-4 bg-blue-500/10 border-blue-500/50">
             <div className="flex items-start justify-between">
               <div className="space-y-2">
@@ -1050,7 +1058,7 @@ export default function Page(): React.JSX.Element {
         )}
 
         {/* First-time user guide */}
-        {showGuide && status !== "connected" && !isMobile && (
+        {hydrated && showGuide && status !== "connected" && !isMobile && (
           <Card className="terminal-border p-4 bg-blue-500/10 border-blue-500/50">
             <div className="flex items-start justify-between">
               <div className="space-y-2">
@@ -1119,7 +1127,7 @@ export default function Page(): React.JSX.Element {
                 <TooltipTrigger
                   onClick={() => setMicMuted(!micMuted)}
                   disabled={status !== "connected"}
-                  className={`w-full ${isMobile ? 'mobile-mic-button mobile-touch-target' : ''} bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors border border-input rounded-md px-3 py-2 flex items-center justify-center ${
+                  className={`w-full ${hydrated && isMobile ? 'mobile-mic-button mobile-touch-target' : ''} bg-black hover:bg-primary/10 text-white font-mono text-xs transition-colors border border-input rounded-md px-3 py-2 flex items-center justify-center ${
                     !micMuted && status === "connected" ? "mic-pulse" : ""
                   } disabled:pointer-events-none disabled:opacity-50`}
                   title={micMuted ? "Unmute microphone" : "Mute microphone"}
@@ -1132,7 +1140,7 @@ export default function Page(): React.JSX.Element {
                   ) : (
                     <>
                       <Mic className="w-4 h-4 mr-2" />
-                      {isMobile ? 'MIC ON' : 'MIC LIVE'}
+                      {hydrated && isMobile ? 'MIC ON' : 'MIC LIVE'}
                     </>
                   )}
                 </TooltipTrigger>
