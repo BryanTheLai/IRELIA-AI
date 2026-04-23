@@ -31,17 +31,19 @@ Important: The project is designed so `ELEVENLABS_API_KEY` is only used on the s
 
 ## 🚀 Quick install & run (local)
 
-1. Install dependencies:
+1. Install dependencies with `pnpm`:
 
 ```bash
-npm install
+pnpm install
 ```
 
 2. Start the dev server:
 
 ```bash
-npm run dev
+pnpm dev
 ```
+
+This repo uses `pnpm` as the source-of-truth package manager. The committed lockfile is `pnpm-lock.yaml`.
 
 Open `http://localhost:3000` in your browser. Grant microphone permission when prompted (works on `localhost` or HTTPS). Click the "START AI SALES AGENT" button to connect.
 
